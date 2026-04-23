@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TC">
+<meta name="theme-color" content="#030609">
+<title>Trading Chambers</title>
+<link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxODAgMTgwIj48cmVjdCB3aWR0aD0iMTgwIiBoZWlnaHQ9IjE4MCIgZmlsbD0iIzAzMDYwOSIgcng9IjQwIi8+PHRleHQgeD0iOTAiIHk9IjExNSIgZm9udC1mYW1pbHk9IkFyaWFsIEJsYWNrIiBmb250LXNpemU9IjgwIiBmb250LXdlaWdodD0iOTAwIiBmaWxsPSIjMWRlOWI2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5UQzwvdGV4dD48L3N2Zz4=">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#030609; --surface:#080d14; --card:#0c1420; --border:#14243a;
+  --text:#d4e8ff; --muted:#3a5070; --green:#00e676; --teal:#1de9b6;
+  --blue:#40c4ff; --yellow:#ffd740; --red:#ff3d57; --purple:#b388ff; --orange:#ffab40;
+}
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html, body {
+  background: var(--bg); color: var(--text);
+  font-family: 'JetBrains Mono', -apple-system, monospace;
+  min-height: 100vh; overflow-x: hidden;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Header */
+.hdr {
+  padding: 14px 16px 10px;
+  background: linear-gradient(to bottom, #0a1220, var(--bg));
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10;
+  backdrop-filter: blur(10px);
+}
+.hdr-row { display:flex; justify-content:space-between; align-items:center; }
+.logo { font-family:'Syne',sans-serif; font-size:14px; font-weight:800;
+        letter-spacing:.12em; }
+.logo em { color: var(--teal); font-style:normal; }
+.sub { font-size:9px; color:var(--muted); margin-top:2px; }
+.conn { display:flex; align-items:center; gap:5px; font-size:9px; }
+.dot { width:7px; height:7px; border-radius:50%; }
+.dot.ok { background:var(--green); box-shadow:0 0 5px var(--green); }
+.dot.off { background:var(--red); }
+
+/* Tabs */
+.tabs {
+  display:flex; background:var(--surface); border-bottom:1px solid var(--border);
+  overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none;
+  position:sticky; top:60px; z-index:9;
+}
+.tabs::-webkit-scrollbar { display:none; }
+.tab { padding:12px 16px; font-size:11px; color:var(--muted);
+       border-bottom:2px solid transparent; white-space:nowrap;
+       transition:all .15s; flex-shrink:0; }
+.tab.active { color:var(--teal); border-bottom-color:var(--teal); }
+
+.content { padding: 14px; padding-bottom: 80px; }
+.view { display:none; }
+.view.active { display:block; }
+
+/* Hero card */
+.hero {
+  background: linear-gradient(135deg, #0a1525, #121832);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 18px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+.hero-lbl { font-size:9px; color:var(--muted); letter-spacing:.2em;
+            text-transform:uppercase; margin-bottom:10px; }
+.hero-val { font-family:'Syne',sans-serif; font-size:38px; font-weight:800;
+            line-height:1; margin-bottom:6px; }
+.hero-sub { font-size:10px; color:var(--muted); }
+.hero-delta { font-size:11px; font-weight:600; margin-top:4px; }
+
+/* Grid */
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px; }
+.grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:12px; }
+
+/* Stat card */
+.stat { background:var(--card); border:1px solid var(--border);
+        border-radius:10px; padding:12px; }
+.stat-lbl { font-size:8px; color:var(--muted); letter-spacing:.12em;
+            text-transform:uppercase; margin-bottom:5px; }
+.stat-val { font-family:'Syne',sans-serif; font-size:20px; font-weight:800; }
+.stat-sub { font-size:9px; color:var(--muted); margin-top:3px; }
+
+.g { color:var(--green); } .t { color:var(--teal); } .b { color:var(--blue); }
+.y { color:var(--yellow); } .r { color:var(--red); } .p { color:var(--purple); }
+.o { color:var(--orange); } .m { color:var(--muted); }
+
+/* Brain cards */
+.brain {
+  background:var(--card); border:1px solid var(--border);
+  border-radius:10px; padding:14px; margin-bottom:10px;
+}
+.brain.mimir { border-left: 3px solid var(--teal); }
+.brain.odin  { border-left: 3px solid var(--purple); }
+.brain.thor  { border-left: 3px solid var(--orange); }
+.brain-h { display:flex; justify-content:space-between; align-items:center;
+           margin-bottom:10px; }
+.brain-name { font-family:'Syne',sans-serif; font-size:13px; font-weight:800;
+              letter-spacing:.1em; }
+.badge { font-size:8px; padding:3px 7px; border-radius:3px; letter-spacing:.1em; }
+.badge.a { background:rgba(0,230,118,.15); color:var(--green); }
+.badge.s { background:rgba(255,215,64,.15); color:var(--yellow); }
+.badge.o { background:rgba(255,61,87,.15); color:var(--red); }
+
+.row { display:flex; justify-content:space-between; padding:5px 0;
+       border-bottom:1px solid rgba(255,255,255,.04); font-size:10px; }
+.row:last-child { border-bottom:none; }
+.rk { color:var(--muted); }
+.rv { font-weight:600; }
+
+/* Trade list */
+.trade-item, .signal-item {
+  background:var(--card); border:1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius:8px; padding:12px; margin-bottom:8px;
+}
+.trade-item.win { border-left-color: var(--green); }
+.trade-item.loss { border-left-color: var(--red); }
+.signal-item.bull { border-left-color: var(--green); }
+.signal-item.bear { border-left-color: var(--red); }
+.signal-item.neutral { border-left-color: var(--blue); }
+
+.ti-head { display:flex; justify-content:space-between; align-items:center;
+           margin-bottom:5px; }
+.ti-sym { font-family:'Syne',sans-serif; font-size:14px; font-weight:800; }
+.ti-pnl { font-size:13px; font-weight:700; }
+.ti-meta { font-size:9px; color:var(--muted); margin-top:3px; }
+.ti-reason { font-size:9px; color:var(--text); margin-top:5px;
+             line-height:1.5; opacity:0.8; }
+
+/* Position */
+.pos-item {
+  background:var(--card); border:1px solid var(--border);
+  border-radius:8px; padding:12px; margin-bottom:8px;
+  display:flex; justify-content:space-between; align-items:center;
+}
+.pos-sym { font-family:'Syne',sans-serif; font-size:15px; font-weight:800; }
+.pos-qty { font-size:9px; color:var(--muted); margin-top:2px; }
+.pos-val-c { text-align:right; }
+.pos-val { font-size:13px; font-weight:700; }
+.pos-pct { font-size:10px; margin-top:2px; }
+
+/* Empty state */
+.empty { text-align:center; padding:40px 20px; color:var(--muted); }
+.empty-icon { font-size:32px; margin-bottom:10px; opacity:.5; }
+.empty-txt { font-size:11px; line-height:1.6; }
+
+/* Update time */
+.update-bar {
+  text-align:center; padding:8px; font-size:9px; color:var(--muted);
+  background:var(--surface); border-top:1px solid var(--border);
+  position:fixed; bottom:0; left:0; right:0; z-index:9;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+}
+
+/* Section header */
+.sec-h { font-size:9px; color:var(--muted); letter-spacing:.2em;
+         text-transform:uppercase; margin:16px 0 8px; }
+
+/* Loading */
+.loading { text-align:center; padding:40px; color:var(--muted); font-size:11px; }
+.spin { display:inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Pill */
+.pill { display:inline-block; font-size:9px; padding:3px 8px;
+        border-radius:10px; margin-right:4px; margin-top:3px; }
+.pill.g { background:rgba(0,230,118,.15); color:var(--green); }
+.pill.r { background:rgba(255,61,87,.15); color:var(--red); }
+.pill.m { background:rgba(58,80,112,.2); color:var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <div class="hdr-row">
+    <div>
+      <div class="logo">TRADING CHAMBERS<em>.</em></div>
+      <div class="sub" id="last-update">Connecting...</div>
+    </div>
+    <div class="conn">
+      <div class="dot off" id="status-dot"></div>
+      <span id="status-text" style="color:var(--muted)">offline</span>
+    </div>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showTab('overview',this)">Overview</div>
+  <div class="tab" onclick="showTab('trades',this)">Trades</div>
+  <div class="tab" onclick="showTab('positions',this)">Positions</div>
+  <div class="tab" onclick="showTab('mimir',this)">Mimir</div>
+  <div class="tab" onclick="showTab('signals',this)">Signals</div>
+</div>
+
+<div class="content">
+
+  <!-- OVERVIEW -->
+  <div class="view active" id="v-overview">
+    <div class="hero">
+      <div class="hero-lbl">Portfolio Value</div>
+      <div class="hero-val g" id="hero-pv">—</div>
+      <div class="hero-sub" id="hero-pv-sub">paper trading</div>
+      <div class="hero-delta" id="hero-pv-delta"></div>
+    </div>
+
+    <div class="grid3">
+      <div class="stat">
+        <div class="stat-lbl">Trades</div>
+        <div class="stat-val g" id="s-trades">—</div>
+        <div class="stat-sub">total live</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Win Rate</div>
+        <div class="stat-val b" id="s-wr">—</div>
+        <div class="stat-sub" id="s-wr-sub">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">P&L</div>
+        <div class="stat-val" id="s-pnl">—</div>
+        <div class="stat-sub">total</div>
+      </div>
+    </div>
+
+    <div class="sec-h">Brain Status</div>
+
+    <div class="brain mimir">
+      <div class="brain-h">
+        <div class="brain-name">🧿 MIMIR</div>
+        <div class="badge" id="m-badge">—</div>
+      </div>
+      <div class="row"><span class="rk">Total signals</span><span class="rv t" id="m-sigs">—</span></div>
+      <div class="row"><span class="rk">Last 24 hours</span><span class="rv t" id="m-24h">—</span></div>
+      <div class="row"><span class="rk">Research questions</span><span class="rv t" id="m-q">—</span></div>
+      <div class="row"><span class="rk">Hypotheses validated</span><span class="rv t" id="m-hyp">—</span></div>
+      <div class="row"><span class="rk">Knowledge facts</span><span class="rv t" id="m-facts">—</span></div>
+    </div>
+
+    <div class="brain odin">
+      <div class="brain-h">
+        <div class="brain-name">🔱 ODIN</div>
+        <div class="badge" id="o-badge">—</div>
+      </div>
+      <div class="row"><span class="rk">Role</span><span class="rv p">Edge trading</span></div>
+      <div class="row"><span class="rk">Strategies</span><span class="rv p" id="o-strat">—</span></div>
+    </div>
+
+    <div class="brain thor">
+      <div class="brain-h">
+        <div class="brain-name">⚡ THOR</div>
+        <div class="badge" id="t-badge">—</div>
+      </div>
+      <div class="row"><span class="rk">Role</span><span class="rv o">Speed trading</span></div>
+      <div class="row"><span class="rk">Strategies</span><span class="rv o" id="t-strat">—</span></div>
+    </div>
+
+    <div class="sec-h">Market</div>
+    <div class="grid2">
+      <div class="stat">
+        <div class="stat-lbl">Market</div>
+        <div class="stat-val" id="mkt-status">—</div>
+        <div class="stat-sub" id="mkt-time">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Buying Power</div>
+        <div class="stat-val b" id="mkt-bp">—</div>
+        <div class="stat-sub">available</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRADES -->
+  <div class="view" id="v-trades">
+    <div class="hero">
+      <div class="hero-lbl">Recent Trades</div>
+      <div class="hero-val" id="trades-pnl">—</div>
+      <div class="hero-sub" id="trades-count">live trades</div>
+    </div>
+    <div id="trade-list">
+      <div class="loading">Loading trades...</div>
+    </div>
+  </div>
+
+  <!-- POSITIONS -->
+  <div class="view" id="v-positions">
+    <div class="hero">
+      <div class="hero-lbl">Open Positions</div>
+      <div class="hero-val b" id="pos-count">—</div>
+      <div class="hero-sub" id="pos-value">—</div>
+    </div>
+    <div id="position-list">
+      <div class="loading">Loading positions...</div>
+    </div>
+  </div>
+
+  <!-- MIMIR -->
+  <div class="view" id="v-mimir">
+    <div class="hero">
+      <div class="hero-lbl">Mimir Intelligence</div>
+      <div class="hero-val t" id="mimir-total">—</div>
+      <div class="hero-sub">signals collected</div>
+    </div>
+    <div class="grid2">
+      <div class="stat">
+        <div class="stat-lbl">Today</div>
+        <div class="stat-val t" id="mimir-today">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Sources</div>
+        <div class="stat-val t" id="mimir-srcs">—</div>
+      </div>
+    </div>
+    <div class="sec-h">Autonomous Learning</div>
+    <div class="grid3">
+      <div class="stat">
+        <div class="stat-lbl">Questions</div>
+        <div class="stat-val t" id="mimir-q">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Hypotheses</div>
+        <div class="stat-val t" id="mimir-h">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Facts</div>
+        <div class="stat-val t" id="mimir-f">—</div>
+      </div>
+    </div>
+    <div class="sec-h">Signal Types</div>
+    <div id="mimir-types"></div>
+  </div>
+
+  <!-- SIGNALS -->
+  <div class="view" id="v-signals">
+    <div class="hero">
+      <div class="hero-lbl">Recent Signals</div>
+      <div class="hero-val t" id="signals-count">—</div>
+      <div class="hero-sub">in database</div>
+    </div>
+    <div id="signal-list">
+      <div class="loading">Loading signals...</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="update-bar" id="update-bar">
+  <span id="update-text">Connecting to Firebase...</span>
+</div>
+
+<!-- Firebase -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getFirestore, doc, onSnapshot }
+  from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAsrB0Dx-LJQOpVtbaPmqo-SfWrjYwypT0",
+  authDomain: "trading-chambers.firebaseapp.com",
+  projectId: "trading-chambers",
+  storageBucket: "trading-chambers.firebasestorage.app",
+  messagingSenderId: "909763823446",
+  appId: "1:909763823446:web:44d96d23a998e9c21df8f7"
+};
+
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+
+// Listen to status updates in real-time
+const statusRef = doc(db, "tc_status", "main");
+onSnapshot(statusRef, (snap) => {
+  if (snap.exists()) {
+    const data = snap.data();
+    window.renderAll(data);
+    document.getElementById('status-dot').className = 'dot ok';
+    document.getElementById('status-text').textContent = 'live';
+    document.getElementById('status-text').style.color = 'var(--green)';
+  }
+}, (error) => {
+  console.error("Firebase error:", error);
+  document.getElementById('status-dot').className = 'dot off';
+  document.getElementById('status-text').textContent = 'offline';
+  document.getElementById('update-text').textContent = 'Connection error - check PC sync is running';
+});
+</script>
+
+<script>
+// Render functions — globally available
+window.renderAll = function(data) {
+  if (!data) return;
+
+  const portfolio = data.portfolio || {};
+  const trades    = data.trades    || {};
+  const mimir     = data.mimir     || {};
+  const agents    = data.agents    || {};
+  const market    = data.market    || {};
+
+  renderOverview(portfolio, trades, mimir, agents, market);
+  renderTrades(trades);
+  renderPositions(portfolio);
+  renderMimir(mimir);
+  renderSignals(mimir);
+
+  // Update timestamp
+  const updated = data.updated_at || '';
+  if (updated) {
+    const dt = new Date(updated);
+    const ago = Math.round((Date.now() - dt.getTime()) / 1000);
+    document.getElementById('last-update').textContent = `Updated ${ago}s ago`;
+    document.getElementById('update-text').textContent =
+      `Last sync: ${dt.toLocaleTimeString()}`;
+  }
+};
+
+function renderOverview(p, t, m, a, mkt) {
+  const pv = p.portfolio_value || 0;
+  setText('hero-pv', '$' + pv.toLocaleString('en',{maximumFractionDigits:2}));
+  setText('hero-pv-sub', 'paper trading account');
+
+  setText('s-trades', t.total_trades || 0);
+
+  const wr = t.win_rate || 0;
+  const wrEl = document.getElementById('s-wr');
+  const wrCount = t.total_trades || 0;
+  if (wrCount === 0) {
+    wrEl.textContent = '—';
+    wrEl.className = 'stat-val m';
+  } else {
+    wrEl.textContent = wr.toFixed(1) + '%';
+    wrEl.className = 'stat-val ' + (wr >= 55 ? 'g' : wr >= 45 ? 'b' : 'r');
+  }
+  setText('s-wr-sub', (t.winning_trades||0) + '/' + wrCount);
+
+  const pnl = t.total_pnl || 0;
+  const pnlEl = document.getElementById('s-pnl');
+  pnlEl.textContent = '$' + pnl.toFixed(2);
+  pnlEl.className = 'stat-val ' + (pnl > 0 ? 'g' : pnl < 0 ? 'r' : 'm');
+
+  // Mimir
+  setText('m-sigs', (m.signals_total||0).toLocaleString());
+  setText('m-24h',  m.signals_24h || 0);
+  setText('m-q',    m.autonomous_questions || 0);
+  setText('m-hyp',  m.autonomous_hypotheses || 0);
+  setText('m-facts', m.knowledge_facts || 0);
+  setBadge('m-badge', m.running, m.running ? 'RUNNING' : 'OFFLINE');
+
+  // Odin/Thor
+  const odin = a.odin || {};
+  const thor = a.thor || {};
+  setText('o-strat', (odin.strategies||[]).join(', ') || 'none active');
+  setText('t-strat', (thor.strategies||[]).join(', ') || 'none active');
+  setBadge('o-badge', odin.active, odin.active ? 'ACTIVE' : 'STANDBY');
+  setBadge('t-badge', thor.active, thor.active ? 'ACTIVE' : 'STANDBY');
+
+  // Market
+  setText('mkt-status', mkt.market_open ? 'OPEN' : 'CLOSED');
+  document.getElementById('mkt-status').className =
+    'stat-val ' + (mkt.market_open ? 'g' : 'm');
+  setText('mkt-time', mkt.current_time ? mkt.current_time.slice(11,16) + ' ET' : '—');
+  setText('mkt-bp', '$' + (p.buying_power||0).toLocaleString('en',{maximumFractionDigits:0}));
+}
+
+function renderTrades(t) {
+  const list = t.recent_trades || [];
+  setText('trades-count', (t.total_trades||0) + ' total live trades');
+  const pnl = t.total_pnl || 0;
+  const pnlEl = document.getElementById('trades-pnl');
+  pnlEl.textContent = '$' + pnl.toFixed(2);
+  pnlEl.className = 'hero-val ' + (pnl > 0 ? 'g' : pnl < 0 ? 'r' : 'm');
+
+  const el = document.getElementById('trade-list');
+  if (list.length === 0) {
+    el.innerHTML = `<div class="empty">
+      <div class="empty-icon">📊</div>
+      <div class="empty-txt">No live trades yet.<br>
+      Will appear here when Odin or Thor makes trades during market hours.</div></div>`;
+    return;
+  }
+  el.innerHTML = [...list].reverse().map(tr => {
+    const p = tr.pnl || 0;
+    const cls = p > 0 ? 'win' : p < 0 ? 'loss' : '';
+    const pc = p > 0 ? 'g' : p < 0 ? 'r' : 'm';
+    return `<div class="trade-item ${cls}">
+      <div class="ti-head">
+        <div class="ti-sym">${tr.symbol||'?'}</div>
+        <div class="ti-pnl ${pc}">${p >= 0 ? '+' : ''}$${p.toFixed(2)}</div>
+      </div>
+      <div class="ti-meta">
+        <span class="pill m">${(tr.action||'').toUpperCase()}</span>
+        <span class="pill m">${tr.qty||0} shares</span>
+        <span class="pill m">${tr.style||''}</span>
+      </div>
+      <div class="ti-meta">${tr.timestamp||''}</div>
+      ${tr.reasoning ? `<div class="ti-reason">${escapeHtml(tr.reasoning)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderPositions(p) {
+  const positions = p.positions || [];
+  setText('pos-count', positions.length);
+  const total = positions.reduce((s, pos) => s + (pos.market_value||0), 0);
+  setText('pos-value', '$' + total.toLocaleString('en',{maximumFractionDigits:0}) + ' value');
+
+  const el = document.getElementById('position-list');
+  if (positions.length === 0) {
+    el.innerHTML = `<div class="empty">
+      <div class="empty-icon">💼</div>
+      <div class="empty-txt">No open positions.<br>
+      Pending orders will become positions when market opens.</div></div>`;
+    return;
+  }
+  el.innerHTML = positions.map(pos => {
+    const plpct = (pos.unrealized_plpc || 0) * 100;
+    const pc    = plpct > 0 ? 'g' : plpct < 0 ? 'r' : 'm';
+    return `<div class="pos-item">
+      <div>
+        <div class="pos-sym">${pos.symbol}</div>
+        <div class="pos-qty">${pos.qty} @ $${pos.avg_entry.toFixed(2)}</div>
+      </div>
+      <div class="pos-val-c">
+        <div class="pos-val ${pc}">${pos.unrealized_pl >= 0 ? '+' : ''}$${pos.unrealized_pl.toFixed(2)}</div>
+        <div class="pos-pct ${pc}">${plpct >= 0 ? '+' : ''}${plpct.toFixed(2)}%</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderMimir(m) {
+  setText('mimir-total', (m.signals_total||0).toLocaleString());
+  setText('mimir-today', m.signals_24h || 0);
+  setText('mimir-srcs',  Object.keys(m.by_type||{}).length);
+  setText('mimir-q', m.autonomous_questions || 0);
+  setText('mimir-h', m.autonomous_hypotheses || 0);
+  setText('mimir-f', m.knowledge_facts || 0);
+
+  const types = m.by_type || {};
+  const el = document.getElementById('mimir-types');
+  if (Object.keys(types).length === 0) {
+    el.innerHTML = '<div class="empty"><div class="empty-txt">No signals collected yet</div></div>';
+    return;
+  }
+  el.innerHTML = Object.entries(types).map(([type, n]) => `
+    <div class="row">
+      <span class="rk">${type.replace(/_/g,' ')}</span>
+      <span class="rv t">${n.toLocaleString()}</span>
+    </div>`).join('');
+}
+
+function renderSignals(m) {
+  const signals = m.recent_signals || [];
+  setText('signals-count', (m.signals_total||0).toLocaleString());
+  const el = document.getElementById('signal-list');
+  if (signals.length === 0) {
+    el.innerHTML = `<div class="empty">
+      <div class="empty-icon">🧿</div>
+      <div class="empty-txt">No signals collected yet.<br>
+      Start Mimir to begin collecting.</div></div>`;
+    return;
+  }
+  el.innerHTML = signals.map(s => {
+    const sent = s.sentiment || 0;
+    const cls  = sent > 0.2 ? 'bull' : sent < -0.2 ? 'bear' : 'neutral';
+    const icon = sent > 0.2 ? '↑' : sent < -0.2 ? '↓' : '•';
+    return `<div class="signal-item ${cls}">
+      <div class="ti-head">
+        <div class="ti-sym" style="font-size:12px">${s.ticker || 'MARKET'}</div>
+        <div style="font-size:10px;color:var(--muted)">${(s.strength*100||0).toFixed(0)}% str</div>
+      </div>
+      <div class="ti-meta">${s.type||''} ${icon}</div>
+      <div class="ti-reason">${escapeHtml(s.headline||'')}</div>
+      <div class="ti-meta" style="margin-top:4px">${s.timestamp||''}</div>
+    </div>`;
+  }).join('');
+}
+
+function showTab(view, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('v-' + view).classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+function setBadge(id, isActive, text) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'badge ' + (isActive ? 'a' : 's');
+}
+
+function escapeHtml(s) {
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+window.showTab = showTab;
+</script>
+</body>
+</html>
