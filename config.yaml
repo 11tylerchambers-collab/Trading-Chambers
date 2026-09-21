@@ -1,0 +1,30 @@
+strategy:
+  entry_dev_pct: 0.30      # |price − vwap| / vwap × 100 must exceed this
+  vol_mult: 1.50           # bar volume must be ≥ vol_mult × avg_volume_20
+  max_hold_bars: 10        # time stop
+  stop_pct: 0.50           # adverse move from entry, in %, → exit
+  allow_short: true
+  notional_per_trade: 2000 # dollars; qty = floor(notional / price), min 1
+  max_open_positions: 20
+  min_bars_before_entry: 20   # need avg_volume_20
+universe:
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - GOOGL
+  - META
+  - TSLA
+  - AMD
+  - NFLX
+  - JPM
+  - BAC
+  - XOM
+  - SPY
+  - QQQ
+  - COST
+  - WMT
+  - DIS
+  - INTC
+  - CRM
+  - AVGO
