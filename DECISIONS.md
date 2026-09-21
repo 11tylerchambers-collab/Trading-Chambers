@@ -65,3 +65,31 @@ Each entry: what was ambiguous or unstated, what I chose, and why. Ordered by bu
 - **Non-grid current values** (e.g. a manual `entry_dev_pct: 0.33`) are snapped to the nearest grid point before the one-step rule is applied.
 - **Session times for replay days** come from the calendar when the engine runs the sweep (`sessions=` argument); the CLI `--replay`/`--sweep` use the calendar if credentials are present and fall back to 9:30–16:00 otherwise.
 - **`--sweep` on the CLI** runs the same `run_sweep` immediately, for a manual re-run or a first look; it is not a schedule.
+
+## Step 9 — dashboard
+
+- **Runs in-process.** `python -m chambers.main` starts uvicorn in a daemon thread of the engine process, so one systemd unit covers both and the dashboard dies and restarts with the engine. It opens its own `Store` connection; SQLite WAL handles the two connections in one process.
+- **Portfolio value and buying power** are not in the heartbeat schema (§9 is fixed), so the dashboard calls `broker.account()` itself, cached for 30 s, which is one Alpaca call per 30 s regardless of how many phones are polling. With no broker (offline test) the tiles show "—".
+- **"Exit trigger distance"** is shown as three numbers per position: `to vwap` (percent move still needed to touch VWAP), `to stop` (percent of adverse room left before `stop_pct`, red under 0.15%), and `bars held / max`. Current price and VWAP are rebuilt from the position's session bars in the store.
+- **Sweep history "trades / net PnL"** are the chosen combination's replay results over the sweep window (that is what the sweep scored), shown next to the live closed-trade count that gated the change. The delta is against the previous sweep row.
+- **Manual params save writes `params_history` with `source = manual` and no summary**, and `params` with `source = manual`. Unknown keys, non-numeric values and out-of-range values are rejected with a 400 before anything is written.
+- **Tokens** are random 32-byte strings held in a process-memory set: a restart logs every browser out, which is the intended behavior of "token kept in memory". Password comparison is constant-time. An empty `DASH_PASSWORD` makes login fail with a clear 503 instead of allowing an empty password.
+- **No favicon route**: the browser's `/favicon.ico` request 404s harmlessly. Not worth a route or an inline icon.
+- **Verified** with headless Chromium at 390×844 against a seeded database: all eight sections render, login rejects a wrong password, pause/resume, two-tap flatten and params save all round-trip to the database, and the page has no horizontal scroll (tables scroll inside their cards).
+
+## Step 10 — deploy
+
+- **systemd unit** runs as a dedicated `chambers` user from `/opt/chambers` with `Restart=always`, `RestartSec=10`; the unit could not be installed in the build container (no systemd), so the kill/restart check is written up as a command sequence in `INSTALL.md` §A.5 for the host.
+- **Windows** gets a `.bat` restart loop (the equivalent of `Restart=always`) plus `powercfg` and Task Scheduler instructions; `INSTALL.md` states the sleep/update risk up front.
+- **Stop behavior**: SIGTERM ends the process without flattening. Open positions are adopted by reconcile on the next start; the eod flatten and safety net still run at close if the process is back. Flattening on stop was not specified and would make a routine `systemctl restart` close trades.
+
+## --gate
+
+- **Criterion 4 ("≈ minutes × 20")** is implemented as ≥ 98% of `minutes × universe_size`, counting only signals timestamped inside `[open, flatten_at)`, so after-hours `--once` runs neither help nor hurt. 98% matches criterion 1.
+- **Criterion 1** counts distinct cycle minutes inside the window, so a duplicate cycle in one minute cannot pad the ratio.
+- **Sessions come from the calendar when keys are present** (early closes shrink the minute denominator); without keys the gate assumes 9:30–16:00.
+- The gate reports the two manual criteria (7, 8) as a reminder line and exits non-zero unless all six items pass **and** five sessions exist.
+
+## Fill polling
+
+- `wait_fill` polls `timeout / 0.25` times (20 polls for 5 s) instead of comparing wall-clock time, so the 5-second budget is exact in production and instant under a fake clock in tests.

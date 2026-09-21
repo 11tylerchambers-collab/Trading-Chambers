@@ -338,16 +338,17 @@ class Engine:
 
     # ---- orders ------------------------------------------------------------
     def wait_fill(self, order_id: str, timeout: float = FILL_TIMEOUT_S) -> dict:
-        """Poll order_status until terminal or timeout. Returns the last status dict."""
-        deadline = time.monotonic() + timeout
+        """Poll order_status every FILL_POLL_S until terminal or `timeout` seconds of polling
+        (timeout / FILL_POLL_S polls). Returns the last status dict."""
+        polls = max(1, int(timeout / FILL_POLL_S))
         last: dict = {"status": "unknown", "filled_qty": 0.0, "filled_avg_price": None, "filled_at": None}
-        while True:
+        for i in range(polls):
             last = self.broker.order_status(order_id)
             if last.get("status") in ("filled", "canceled", "cancelled", "rejected", "expired"):
                 return last
-            if time.monotonic() >= deadline:
-                return last
-            self._sleep(FILL_POLL_S)
+            if i < polls - 1:
+                self._sleep(FILL_POLL_S)
+        return last
 
     def open_position(self, sig: Signal, quotes: dict, now: datetime) -> Position:
         sym = sig.symbol
@@ -555,7 +556,14 @@ class Engine:
         from .sweep import run_sweep
         fn = self._sweep_fn or run_sweep
         try:
-            summary = fn(self.store, self.params, session.date, self.now())
+            sessions = {}
+            if self._sweep_fn is None:
+                dates = self.store.bar_dates(5)
+                if dates:
+                    d0 = date.fromisoformat(dates[0])
+                    sessions = self.clock.sessions_between(d0 - timedelta(days=1), session.date)
+            summary = fn(self.store, self.params, session.date, self.now(), sessions=sessions) if sessions \
+                else fn(self.store, self.params, session.date, self.now())
             log.info("sweep done: %s", summary.get("reason") if isinstance(summary, dict) else summary)
             return summary
         except Exception as e:

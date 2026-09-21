@@ -148,30 +148,56 @@ def cmd_once() -> int:
     return 0
 
 
+def optional_runtime():
+    """(store, broker, clock) with a live broker when paper credentials exist, else (store, None, None).
+    Used by the offline commands so replay/sweep/gate can use real session times when possible."""
+    from .store import Store
+    load_env()
+    if os.environ.get("ALPACA_PAPER") == "true" and os.environ.get("ALPACA_API_KEY") \
+            and os.environ.get("ALPACA_SECRET_KEY"):
+        try:
+            return build_runtime(require_paper_env())
+        except Exception as e:  # keys present but unusable: fall back to offline
+            log.warning("broker unavailable (%s); using default 9:30-16:00 sessions", e)
+    return Store(DB_PATH), None, None
+
+
+def sessions_for(clock, dates: list[str]) -> dict:
+    """date -> Session for the given ISO dates, from the calendar when a clock is available."""
+    if clock is None or not dates:
+        return {}
+    ds = sorted(date.fromisoformat(x) for x in dates)
+    try:
+        return clock.sessions_between(ds[0] - timedelta(days=1), ds[-1] + timedelta(days=1))
+    except Exception as e:
+        log.warning("calendar unavailable (%s); using default sessions", e)
+        return {}
+
+
+def current_params(store, cfg: dict):
+    from .strategy import Params
+    live = store.read_params()
+    return Params.from_dict(live["params"] if live else cfg["strategy"])
+
+
 def cmd_replay(day: str) -> int:
     from .replay import replay_day, format_replay
-    from .store import Store
-    from .strategy import Params
     cfg = load_config()
-    store = Store(DB_PATH)
-    live = store.read_params()
-    params = Params.from_dict(live["params"] if live else cfg["strategy"])
+    store, broker, clock = optional_runtime()
     d = date.fromisoformat(day)
-    res = replay_day(store, d, params)
+    sess = sessions_for(clock, [day]).get(d)
+    res = replay_day(store, d, current_params(store, cfg), sess)
     print(format_replay(res))
     return 0
 
 
 def cmd_sweep() -> int:
-    from .sweep import run_sweep
-    from .store import Store
-    from .strategy import Params
+    from .sweep import run_sweep, N_DAYS
     cfg = load_config()
-    store = Store(DB_PATH)
-    live = store.read_params()
-    params = Params.from_dict(live["params"] if live else cfg["strategy"])
+    store, broker, clock = optional_runtime()
     today = now_et().date()
-    summary = run_sweep(store, params, today, now_et())
+    sessions = sessions_for(clock, store.bar_dates(N_DAYS))
+    summary = run_sweep(store, current_params(store, cfg), today, now_et(), sessions=sessions)
     print(summary_text(summary))
     return 0
 
@@ -187,11 +213,12 @@ def summary_text(summary: dict) -> str:
 
 def cmd_gate() -> int:
     from .gate import run_gate, format_gate
-    from .store import Store
-    store = Store(DB_PATH)
-    results = run_gate(store)
+    cfg = load_config()
+    store, broker, clock = optional_runtime()
+    sessions = sessions_for(clock, store.cycle_dates(5))
+    results = run_gate(store, sessions, universe_size=len(cfg["universe"]))
     print(format_gate(results))
-    return 0 if all(r["pass"] for r in results["items"]) else 1
+    return 0 if all(r["pass"] for r in results["items"]) and len(results["sessions"]) >= 5 else 1
 
 
 def cmd_run() -> int:
@@ -204,7 +231,8 @@ def cmd_run() -> int:
     store, broker, clock = build_runtime(creds)
     eng = Engine(store, broker, clock, cfg["universe"], cfg["strategy"])
     t = threading.Thread(target=serve, kwargs={"db_path": DB_PATH, "password": creds["dash_password"],
-                                               "broker": broker, "clock": clock, "host": "0.0.0.0", "port": 8080},
+                                               "broker": broker, "clock": clock, "universe": cfg["universe"],
+                                               "host": "0.0.0.0", "port": 8080},
                          daemon=True, name="dashboard")
     t.start()
     eng.run_forever()

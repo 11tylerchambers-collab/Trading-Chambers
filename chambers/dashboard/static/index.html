@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#030609">
+<title>Trading Chambers</title>
+<style>
+:root {
+  --bg:#030609; --surface:#080d14; --card:#0c1420; --border:#14243a;
+  --text:#d4e8ff; --muted:#5a7090; --dim:#3a5070; --green:#00e676; --teal:#1de9b6;
+  --blue:#40c4ff; --yellow:#ffd740; --red:#ff3d57; --purple:#b388ff; --orange:#ffab40;
+}
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html, body { background:var(--bg); color:var(--text); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size:13px; }
+body { padding: env(safe-area-inset-top, 0) 0 32px 0; }
+main { max-width: 720px; margin: 0 auto; padding: 0 12px; }
+h1 { font-size:15px; letter-spacing:.14em; color:var(--teal); padding:14px 0 8px; text-transform:uppercase; }
+h2 { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:16px 0 6px; }
+.card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:10px 12px; }
+.row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; }
+.stat { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:8px; }
+.stat .k { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
+.stat .v { font-size:16px; font-weight:700; margin-top:2px; word-break:break-all; }
+.badge { display:inline-block; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; border:1px solid var(--border); background:var(--surface); }
+.dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:-1px; }
+.ok { color:var(--green); } .bad { color:var(--red); } .warn { color:var(--yellow); } .off { color:var(--dim); }
+.bg-ok { background:var(--green); } .bg-bad { background:var(--red); } .bg-off { background:var(--dim); }
+.pos { color:var(--green); } .neg { color:var(--red); }
+table { width:100%; border-collapse:collapse; }
+th, td { text-align:left; padding:6px 4px; border-bottom:1px solid var(--border); font-size:12px; white-space:nowrap; }
+th { color:var(--muted); font-weight:400; font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
+td.num, th.num { text-align:right; }
+tr.tap { cursor:pointer; }
+tr.detail td { white-space:normal; color:var(--muted); font-size:11px; background:var(--surface); }
+.tablewrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+button { font:inherit; color:var(--text); background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; font-size:11px; cursor:pointer; }
+button:active { transform:translateY(1px); }
+button.primary { border-color:var(--teal); color:var(--teal); }
+button.danger { border-color:var(--red); color:var(--red); }
+button.armed { background:var(--red); color:#fff; }
+button:disabled { opacity:.4; cursor:default; }
+.controls { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.form { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.field label { display:block; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:3px; }
+.field input[type=number], .field input[type=text], .field input[type=password] { width:100%; font:inherit; color:var(--text); background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:8px; }
+.field input[type=checkbox] { width:18px; height:18px; }
+.muted { color:var(--muted); } .small { font-size:11px; }
+.msg { font-size:11px; color:var(--yellow); min-height:14px; margin-top:6px; }
+.empty { color:var(--dim); padding:8px 0; font-size:12px; }
+#login { position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:10; padding:16px; }
+#login .card { width:100%; max-width:360px; }
+#login h1 { padding-top:0; }
+.err { border-left:3px solid var(--red); padding:6px 8px; margin-bottom:6px; background:var(--surface); border-radius:4px; }
+.err .w { color:var(--red); font-weight:700; }
+.err .m { white-space:pre-wrap; word-break:break-word; color:var(--muted); font-size:11px; }
+.sweep { border-bottom:1px solid var(--border); padding:6px 0; font-size:11px; }
+.sweep:last-child { border-bottom:none; }
+.sweep .d { font-weight:700; color:var(--text); }
+.sweep .delta { color:var(--yellow); }
+.sweep .same { color:var(--dim); }
+.foot { color:var(--dim); font-size:10px; text-align:center; margin-top:18px; }
+@media (min-width: 520px) { .grid { grid-template-columns: repeat(4, 1fr); } .form { grid-template-columns: repeat(4, 1fr); } }
+</style>
+</head>
+<body>
+<div id="login">
+  <div class="card">
+    <h1>Trading Chambers</h1>
+    <div class="field"><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" autofocus></div>
+    <div style="height:8px"></div>
+    <button class="primary" id="loginBtn" style="width:100%">Enter</button>
+    <div class="msg" id="loginMsg"></div>
+  </div>
+</div>
+
+<main id="app" style="display:none">
+  <h1>Trading Chambers <span class="muted small">phase 0</span></h1>
+
+  <!-- 1. Heartbeat bar -->
+  <section class="card" id="heartbeat">
+    <div class="row">
+      <span class="badge" id="stateBadge">—</span>
+      <span id="cycleAge" class="off"><span class="dot bg-off"></span>no cycle yet</span>
+    </div>
+    <div class="row small muted" style="margin-top:8px">
+      <span id="marketStatus">market —</span>
+      <span id="nextOpen"></span>
+    </div>
+    <div class="row small muted" style="margin-top:4px">
+      <span id="pidInfo"></span>
+      <span id="lastErr" class="bad"></span>
+    </div>
+  </section>
+
+  <!-- 2. Today -->
+  <h2>Today</h2>
+  <section class="grid" id="today"></section>
+
+  <!-- 3. Controls -->
+  <h2>Controls</h2>
+  <section class="card">
+    <div class="controls">
+      <button id="pauseBtn" class="primary">Pause entries</button>
+      <button id="flattenBtn" class="danger">Flatten now</button>
+    </div>
+    <div class="msg" id="ctlMsg"></div>
+  </section>
+
+  <!-- 4. Open positions -->
+  <h2>Open positions</h2>
+  <section class="card tablewrap" id="positions"></section>
+
+  <!-- 5. Recent trades -->
+  <h2>Recent trades</h2>
+  <section class="card tablewrap" id="trades"></section>
+
+  <!-- 6. Params -->
+  <h2>Params <span id="paramsMeta" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+  <section class="card">
+    <div class="form" id="paramsForm"></div>
+    <div style="height:8px"></div>
+    <button class="primary" id="saveBtn" style="width:100%">Save (applies next cycle)</button>
+    <div class="msg" id="paramsMsg"></div>
+  </section>
+
+  <!-- 7. Sweep history -->
+  <h2>Sweep history</h2>
+  <section class="card" id="sweeps"></section>
+
+  <!-- 8. Errors -->
+  <h2>Errors</h2>
+  <section class="card" id="errors"></section>
+
+  <div class="foot" id="foot"></div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var token = null;              // kept in memory only
+  var state = null;
+  var pollTimer = null;
+  var flattenArmed = false, flattenTimer = null;
+  var openDetail = null;         // trade id whose detail row is expanded
+  var paramsDirty = false;
+  var PARAM_FIELDS = [
+    ['entry_dev_pct', 'entry dev %', 'number', '0.01'],
+    ['vol_mult', 'vol mult', 'number', '0.05'],
+    ['max_hold_bars', 'max hold bars', 'number', '1'],
+    ['stop_pct', 'stop %', 'number', '0.01'],
+    ['notional_per_trade', 'notional / trade', 'number', '50'],
+    ['max_open_positions', 'max open positions', 'number', '1'],
+    ['min_bars_before_entry', 'min bars before entry', 'number', '1'],
+    ['allow_short', 'allow short', 'checkbox', null]
+  ];
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function num(v, d) { if (v == null || isNaN(v)) return '—'; return Number(v).toFixed(d == null ? 2 : d); }
+  function money(v) { if (v == null || isNaN(v)) return '—'; var n = Number(v); return (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+  function pnlCls(v) { return v == null ? '' : (v >= 0 ? 'pos' : 'neg'); }
+  function hhmm(iso) { if (!iso) return '—'; var m = /T(\d\d:\d\d:\d\d)/.exec(iso); return m ? m[1] : iso; }
+  function ago(iso, now) { if (!iso) return null; return Math.max(0, Math.round((new Date(now) - new Date(iso)) / 1000)); }
+  function fmtDur(s) { if (s == null) return '—'; if (s < 60) return s + 's'; if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's'; var h = Math.floor(s / 3600); var m = Math.floor((s % 3600) / 60); if (h < 48) return h + 'h ' + m + 'm'; return Math.floor(h / 24) + 'd ' + (h % 24) + 'h'; }
+
+  function api(method, path, body) {
+    var opts = { method: method, headers: {} };
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+    if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+    return fetch(path, opts).then(function (r) {
+      if (r.status === 401 && path !== '/api/login') { logout('session expired — log in again'); throw new Error('unauthorized'); }
+      return r.json().then(function (j) { if (!r.ok) throw new Error(j.detail || r.statusText); return j; });
+    });
+  }
+
+  function logout(msg) {
+    token = null; state = null;
+    if (pollTimer) clearInterval(pollTimer);
+    $('app').style.display = 'none'; $('login').style.display = 'flex';
+    $('loginMsg').textContent = msg || '';
+  }
+
+  function login() {
+    $('loginMsg').textContent = '';
+    api('POST', '/api/login', { password: $('pw').value }).then(function (j) {
+      token = j.token; $('pw').value = '';
+      $('login').style.display = 'none'; $('app').style.display = 'block';
+      refresh(); pollTimer = setInterval(refresh, 5000);
+    }).catch(function (e) { $('loginMsg').textContent = e.message; });
+  }
+  $('loginBtn').addEventListener('click', login);
+  $('pw').addEventListener('keydown', function (e) { if (e.key === 'Enter') login(); });
+
+  function refresh() {
+    api('GET', '/api/state').then(function (s) { state = s; render(); }).catch(function (e) {
+      $('foot').textContent = 'refresh failed: ' + e.message;
+    });
+  }
+
+  // ---------- render ----------
+  function render() {
+    var s = state; if (!s) return;
+    renderHeartbeat(s); renderToday(s); renderControls(s); renderPositions(s);
+    renderTrades(s); renderParams(s); renderSweeps(s); renderErrors(s);
+    $('foot').textContent = 'updated ' + hhmm(s.now) + ' ET · polling every 5s';
+  }
+
+  function renderHeartbeat(s) {
+    var hb = s.heartbeat || {}, mk = s.market || {};
+    var st = hb.state || 'unknown';
+    var badge = $('stateBadge'); badge.textContent = st;
+    badge.className = 'badge ' + ({running:'ok', flattening:'warn', sweeping:'warn', preopen:'warn', postclose:'off', idle:'off'}[st] || 'off');
+    var age = ago(hb.last_cycle_ts, s.now);
+    var el = $('cycleAge'); var cls, dot, txt;
+    if (age == null) { cls = 'off'; dot = 'bg-off'; txt = 'no cycle yet'; }
+    else {
+      txt = 'last cycle ' + fmtDur(age) + ' ago';
+      if (mk.is_open === true) { cls = age < 90 ? 'ok' : 'bad'; dot = age < 90 ? 'bg-ok' : 'bg-bad'; }
+      else if (mk.is_open === false) { cls = 'off'; dot = 'bg-off'; }
+      else { cls = age < 90 ? 'ok' : 'off'; dot = age < 90 ? 'bg-ok' : 'bg-off'; }
+    }
+    el.className = cls; el.innerHTML = '<span class="dot ' + dot + '"></span>' + esc(txt);
+    var ms = $('marketStatus');
+    if (mk.is_open === true) ms.innerHTML = '<span class="ok">market open</span>' + (mk.entries_allowed ? ' · entries allowed' : ' · entries closed') + (mk.flatten_at ? ' · flatten ' + hhmm(mk.flatten_at) : '');
+    else if (mk.is_open === false) ms.innerHTML = '<span class="off">market closed</span>';
+    else ms.innerHTML = '<span class="off">market status unavailable (no broker)</span>';
+    var no = $('nextOpen');
+    if (mk.is_open === false && mk.next_open) { var secs = Math.max(0, Math.round((new Date(mk.next_open) - new Date(s.now)) / 1000)); no.textContent = 'opens in ' + fmtDur(secs); }
+    else if (mk.is_open === true && mk.session_close) no.textContent = 'closes ' + hhmm(mk.session_close);
+    else no.textContent = '';
+    $('pidInfo').textContent = hb.pid ? ('pid ' + hb.pid + (hb.started_at ? ' · up since ' + hhmm(hb.started_at) : '')) : '';
+    $('lastErr').textContent = hb.last_error ? ('last error ' + hhmm(hb.last_error_ts) + ': ' + hb.last_error.slice(0, 80)) : '';
+  }
+
+  function renderToday(s) {
+    var hb = s.heartbeat || {}, ac = s.account || {};
+    var items = [
+      ['cycles', hb.cycles_today], ['signals', hb.signals_today], ['fired', hb.fired_today],
+      ['opened', hb.opened_today], ['closed', hb.closed_today], ['open pos', hb.open_positions],
+      ['net pnl today', money(hb.net_pnl_today), pnlCls(hb.net_pnl_today)],
+      ['portfolio', money(ac.portfolio_value)], ['buying power', money(ac.buying_power)]
+    ];
+    $('today').innerHTML = items.map(function (it) {
+      return '<div class="stat"><div class="k">' + esc(it[0]) + '</div><div class="v ' + (it[2] || '') + '">' + esc(it[1] == null ? '—' : it[1]) + '</div></div>';
+    }).join('');
+  }
+
+  function renderControls(s) {
+    var c = s.controls || {};
+    var pb = $('pauseBtn');
+    pb.textContent = c.paused ? 'Resume entries' : 'Pause entries';
+    pb.className = c.paused ? 'danger' : 'primary';
+    if (!flattenArmed) { var fb = $('flattenBtn'); fb.textContent = c.flatten_requested ? 'Flatten pending…' : 'Flatten now'; fb.className = 'danger'; }
+    if (c.paused && !$('ctlMsg').textContent) $('ctlMsg').textContent = 'entries paused — exits keep running';
+    else if (!c.paused && $('ctlMsg').textContent === 'entries paused — exits keep running') $('ctlMsg').textContent = '';
+  }
+  $('pauseBtn').addEventListener('click', function () {
+    var paused = !(state && state.controls && state.controls.paused);
+    api('POST', '/api/pause', { paused: paused }).then(function () { $('ctlMsg').textContent = paused ? 'entries paused — exits keep running' : 'entries resumed'; refresh(); })
+      .catch(function (e) { $('ctlMsg').textContent = e.message; });
+  });
+  $('flattenBtn').addEventListener('click', function () {
+    var fb = $('flattenBtn');
+    if (!flattenArmed) {
+      flattenArmed = true; fb.textContent = 'Tap again to confirm'; fb.className = 'danger armed';
+      flattenTimer = setTimeout(function () { flattenArmed = false; fb.className = 'danger'; renderControls(state || {}); }, 4000);
+      return;
+    }
+    clearTimeout(flattenTimer); flattenArmed = false; fb.className = 'danger';
+    api('POST', '/api/flatten').then(function () { $('ctlMsg').textContent = 'flatten requested — runs on the next cycle'; refresh(); })
+      .catch(function (e) { $('ctlMsg').textContent = e.message; });
+  });
+
+  function renderPositions(s) {
+    var ps = s.open_positions || [];
+    if (!ps.length) { $('positions').innerHTML = '<div class="empty">no open positions</div>'; return; }
+    var h = '<table><tr><th>sym</th><th>side</th><th class="num">qty</th><th class="num">entry</th><th class="num">now</th><th class="num">unreal</th><th class="num">bars</th><th class="num">to vwap</th><th class="num">to stop</th></tr>';
+    ps.forEach(function (p) {
+      h += '<tr><td><b>' + esc(p.symbol) + '</b></td><td class="' + (p.side === 'long' ? 'ok' : 'warn') + '">' + esc(p.side) + '</td>' +
+        '<td class="num">' + esc(p.qty) + '</td><td class="num">' + num(p.entry_price, 2) + '</td><td class="num">' + num(p.current_price, 2) + '</td>' +
+        '<td class="num ' + pnlCls(p.unrealized_pl) + '">' + money(p.unrealized_pl) + '</td>' +
+        '<td class="num">' + esc(p.bars_held) + '/' + esc(p.bars_held + p.bars_left) + '</td>' +
+        '<td class="num">' + (p.to_vwap_pct == null ? '—' : num(p.to_vwap_pct, 2) + '%') + '</td>' +
+        '<td class="num ' + (p.to_stop_pct != null && p.to_stop_pct < 0.15 ? 'bad' : '') + '">' + (p.to_stop_pct == null ? '—' : num(p.to_stop_pct, 2) + '%') + '</td></tr>';
+    });
+    $('positions').innerHTML = h + '</table>';
+  }
+
+  function renderTrades(s) {
+    var ts = s.recent_trades || [];
+    if (!ts.length) { $('trades').innerHTML = '<div class="empty">no closed trades yet</div>'; return; }
+    var h = '<table><tr><th>time</th><th>sym</th><th>side</th><th class="num">net</th><th>exit</th><th class="num">bars</th></tr>';
+    ts.forEach(function (t) {
+      h += '<tr class="tap" data-id="' + t.id + '"><td>' + hhmm(t.exit_ts) + '</td><td><b>' + esc(t.symbol) + '</b></td><td class="' + (t.side === 'long' ? 'ok' : 'warn') + '">' + esc(t.side) + '</td>' +
+        '<td class="num ' + pnlCls(t.net_pnl) + '">' + money(t.net_pnl) + '</td><td>' + esc(t.exit_reason) + '</td><td class="num">' + esc(t.bars_held) + '</td></tr>';
+      if (openDetail === t.id) {
+        var hy = t.hypothesis || {};
+        h += '<tr class="detail"><td colspan="6">' +
+          'entry ' + hhmm(t.entry_ts) + ' @ ' + num(t.entry_price, 4) + ' → exit @ ' + num(t.exit_price, 4) + ' · qty ' + esc(t.qty) +
+          '<br>hypothesis: dev ' + num(hy.dev_pct, 3) + '% · vol ratio ' + num(hy.vol_ratio, 2) + ' · expect ' + esc(hy.expect) + ' ' + num(hy.expect_move_pct, 3) + '% within ' + esc(hy.expect_within_bars) + ' bars' +
+          '<br>MAE ' + num(t.mae_pct, 3) + '% · MFE ' + num(t.mfe_pct, 3) + '% · gross ' + money(t.gross_pnl) + ' · est cost ' + money(t.est_cost) +
+          '<br>bid/ask in ' + num(t.entry_bid, 2) + '/' + num(t.entry_ask, 2) + ' · out ' + num(t.exit_bid, 2) + '/' + num(t.exit_ask, 2) +
+          '</td></tr>';
+      }
+    });
+    $('trades').innerHTML = h + '</table>';
+    Array.prototype.forEach.call($('trades').querySelectorAll('tr.tap'), function (tr) {
+      tr.addEventListener('click', function () { var id = Number(tr.getAttribute('data-id')); openDetail = openDetail === id ? null : id; renderTrades(state); });
+    });
+  }
+
+  function renderParams(s) {
+    var p = (s.params && s.params.params) || {};
+    $('paramsMeta').textContent = '· ' + (s.params.source || '—') + (s.params.updated_at ? ' · ' + s.params.updated_at.slice(0, 16).replace('T', ' ') : '');
+    if (paramsDirty) return;  // don't clobber an edit in progress
+    var form = $('paramsForm');
+    if (!form.children.length) {
+      form.innerHTML = PARAM_FIELDS.map(function (f) {
+        var inp = f[2] === 'checkbox' ? '<input type="checkbox" id="p_' + f[0] + '">' : '<input type="number" step="' + f[3] + '" id="p_' + f[0] + '" inputmode="decimal">';
+        return '<div class="field"><label for="p_' + f[0] + '">' + esc(f[1]) + '</label>' + inp + '</div>';
+      }).join('');
+      Array.prototype.forEach.call(form.querySelectorAll('input'), function (i) { i.addEventListener('input', function () { paramsDirty = true; }); });
+    }
+    PARAM_FIELDS.forEach(function (f) { var el = $('p_' + f[0]); if (f[2] === 'checkbox') el.checked = !!p[f[0]]; else el.value = p[f[0]] == null ? '' : p[f[0]]; });
+  }
+  $('saveBtn').addEventListener('click', function () {
+    var body = {};
+    PARAM_FIELDS.forEach(function (f) { var el = $('p_' + f[0]); body[f[0]] = f[2] === 'checkbox' ? el.checked : Number(el.value); });
+    api('POST', '/api/params', { params: body }).then(function () { paramsDirty = false; $('paramsMsg').textContent = 'saved — applies on the next cycle'; refresh(); })
+      .catch(function (e) { $('paramsMsg').textContent = e.message; });
+  });
+
+  function renderSweeps(s) {
+    var hs = s.sweep_history || [];
+    if (!hs.length) { $('sweeps').innerHTML = '<div class="empty">no sweep has run yet</div>'; return; }
+    $('sweeps').innerHTML = hs.map(function (h) {
+      var p = h.params || {};
+      var d = Object.keys(h.delta || {});
+      var deltaTxt = d.length ? d.map(function (k) { return k + ' ' + h.delta[k][0] + '→' + h.delta[k][1]; }).join(', ') : 'unchanged';
+      return '<div class="sweep"><span class="d">' + esc(h.date) + '</span> · dev ' + esc(p.entry_dev_pct) + ' · vol ' + esc(p.vol_mult) + ' · hold ' + esc(p.max_hold_bars) + ' · stop ' + esc(p.stop_pct) +
+        '<br><span class="' + (d.length ? 'delta' : 'same') + '">' + esc(deltaTxt) + '</span>' +
+        ' · replay ' + (h.replay_trades == null ? '—' : esc(h.replay_trades) + ' trades / ' + money(h.replay_net_pnl)) + (h.days ? ' over ' + h.days.length + 'd' : '') +
+        ' · live closed today ' + esc(h.today_closed_trades == null ? '—' : h.today_closed_trades) +
+        (h.reason && !h.changed ? '<br><span class="muted">' + esc(h.reason) + '</span>' : '') + '</div>';
+    }).join('');
+  }
+
+  function renderErrors(s) {
+    var es = s.errors || [];
+    if (!es.length) { $('errors').innerHTML = '<div class="empty">no errors</div>'; return; }
+    $('errors').innerHTML = es.map(function (e) {
+      return '<div class="err"><span class="w">' + esc(e.where_) + '</span> <span class="muted">' + hhmm(e.ts) + ' ' + esc((e.ts || '').slice(0, 10)) + '</span><div class="m">' + esc(e.message) + '</div></div>';
+    }).join('');
+  }
+})();
+</script>
+</body>
+</html>

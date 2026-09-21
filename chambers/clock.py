@@ -140,6 +140,11 @@ class MarketClock:
         s = self.next_session()
         return s.open if s else None
 
+    def sessions_between(self, start: date, end: date) -> dict[date, Session]:
+        """Sessions in [start, end] straight from the calendar endpoint (not the daily cache)."""
+        rows = self._broker.calendar(start, end)
+        return {r["date"]: Session(r["date"], to_et(r["open"]), to_et(r["close"])) for r in rows}
+
     # ---- phase windows ----------------------------------------------------
     def entries_allowed(self) -> bool:
         s = self.today_session()

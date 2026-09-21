@@ -1,0 +1,26 @@
+[Unit]
+Description=Trading Chambers Phase 0 engine + dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chambers
+Group=chambers
+WorkingDirectory=/opt/chambers
+# .env is read by the app itself (ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_PAPER, DASH_PASSWORD)
+ExecStart=/opt/chambers/.venv/bin/python -m chambers.main
+Restart=always
+RestartSec=10
+# give the engine time to flatten/close cleanly on stop
+TimeoutStopSec=30
+KillSignal=SIGTERM
+Environment=PYTHONUNBUFFERED=1
+# hardening (does not affect the app)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/chambers/data
+
+[Install]
+WantedBy=multi-user.target
