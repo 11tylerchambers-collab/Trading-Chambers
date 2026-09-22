@@ -46,7 +46,7 @@ Each entry: what was ambiguous or unstated, what I chose, and why. Ordered by bu
 - **`bars_held` counts completed bars after the entry bar.** The bar that fired the signal is bar 0; the next new bar makes it 1. `time_stop` fires when `bars_held >= max_hold_bars`.
 - **Cycle bars window.** At `hh:mm:05` the fetch ends at `hh:mm:00 − 1s`, so the minute still forming is never evaluated. The start is the most-lagging symbol's `last_ts + 1min`.
 - **Stale bars.** If IEX has no new bar for a symbol, the previous bar is evaluated again. This cannot produce a duplicate entry (the position guard) and cannot change an exit decision, so it is tolerated rather than adding a reason outside the spec's enum.
-- **Same-bar re-entry after a stop.** After a `stop_loss` exit the same bar is immediately eligible for a fresh entry in the same direction (deviation is even larger). That is the spec's strategy as written; not "improved".
+- **Re-entry cooldown (added at the owner's request after the initial build; see the section below).** Previously a symbol could be re-entered on the same bar that stopped it out.
 - **Unfilled orders after 5s** are recorded at the last bar close (entry) or last close (exit), and an error is logged. A market order on a liquid paper account fills within the first poll in practice; if one does not, reconcile at the next preopen and the eod safety net correct the books.
 - **`est_cost` slippage** uses the entry notional (`qty × entry_price`) for both legs.
 - **Manual flatten** writes `exit_reason = manual_flatten` so it is not confused with `eod_flatten`. It does not pause entries; pause first if re-entry is not wanted.
@@ -93,3 +93,14 @@ Each entry: what was ambiguous or unstated, what I chose, and why. Ordered by bu
 ## Fill polling
 
 - `wait_fill` polls `timeout / 0.25` times (20 polls for 5 s) instead of comparing wall-clock time, so the 5-second budget is exact in production and instant under a fake clock in tests.
+
+## Re-entry cooldown (owner request, after the initial build)
+
+- **What.** New param `reentry_cooldown_bars` (default **5**) in `config.yaml`, the `params` table and the dashboard form. After any exit on a symbol, entries on that symbol are blocked until that many bars have completed since the exit bar. `0` turns it off; `1` blocks only same-bar re-entry.
+- **Why it exists.** Without it, a `stop_loss` or `time_stop` exit could be followed by a new entry in the same direction on the same bar, because the deviation that caused the stop still satisfies the entry rule. That churned trades on a thesis that had just failed.
+- **Departures from the spec, accepted by the owner.** §7 lists a fixed set of settings and a fixed reason enum, and §0 says not to change the strategy. This adds one setting and one reason, `cooldown`. It is checked after `already_in_position` and before `no_position_slot`, so every blocked evaluation is still logged with its price, VWAP, deviation and volume ratio.
+- **Shared code path.** The check lives in `strategy.evaluate` (a `bars_since_exit` argument, computed with `strategy.bars_since`). The engine and replay each record the symbol's bar count at exit, so live trading and the sweep behave identically.
+- **Restart safe.** On startup and at preopen the engine rebuilds each symbol's exit bar count from today's closed trades and stored bars. A restart mid-cooldown does not reopen the door early. The cooldown resets each session.
+- **All exit reasons count**, including `vwap_touch` (harmless: at VWAP the entry rule cannot fire anyway), `manual_flatten` and `eod_safety_net`. `reconcile_missing` does not, because no bar-level exit happened.
+- **Not in the sweep grid.** The §10 grid is unchanged; the sweep carries the live cooldown value through every combination.
+- **Effect on the gate.** A cooldown lowers trade count. If §13.2 (≥ 30 closed trades/day) is hard to reach, lower it from the dashboard; no restart needed.

@@ -7,6 +7,7 @@ strategy:
   notional_per_trade: 2000 # dollars; qty = floor(notional / price), min 1
   max_open_positions: 20
   min_bars_before_entry: 20   # need avg_volume_20
+  reentry_cooldown_bars: 5    # bars after an exit before the same symbol can be re-entered (0 = off)
 universe:
   - AAPL
   - MSFT

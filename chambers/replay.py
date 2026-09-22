@@ -18,7 +18,7 @@ from .clock import ET, Session
 from .data import SymbolState
 from .engine import Position, check_exit, trade_economics
 from .store import Bar, Store
-from .strategy import Params, evaluate, hypothesis, position_qty
+from .strategy import Params, bars_since, evaluate, hypothesis, position_qty
 
 REPLAY_SPREAD = 0.0002   # 0.02% of price, bid/ask straddle the close
 
@@ -146,9 +146,10 @@ def replay(day: DayData, params: Params, broker: Optional[ReplayBroker] = None,
     session = day.session
     res = ReplayResult(day.date, params)
     positions: dict[str, Position] = {}
+    exit_bar_count: dict[str, int] = {}
     cycle_offset = timedelta(minutes=1, seconds=5)
 
-    def close(pos: Position, snap_close: float, ts: datetime, reason: str) -> None:
+    def close(pos: Position, snap_close: float, ts: datetime, reason: str, bar_count: int = 0) -> None:
         exit_px = broker.fill(snap_close)
         bid, ask = broker.quote(snap_close)
         pos.update_excursion(exit_px)
@@ -158,6 +159,7 @@ def replay(day: DayData, params: Params, broker: Optional[ReplayBroker] = None,
                                       reason, pos.bars_held, pos.mae_pct, pos.mfe_pct, gross, cost, net,
                                       pos.__dict__.pop("_hyp", {}) if collect_hypothesis else {}))
         del positions[pos.symbol]
+        exit_bar_count[pos.symbol] = bar_count
 
     for m in day.minutes:
         cycle_now = m + cycle_offset
@@ -172,7 +174,7 @@ def replay(day: DayData, params: Params, broker: Optional[ReplayBroker] = None,
             pos.on_bar(snap.ts, snap.last_close)
             reason = check_exit(pos, snap.last_close, snap.vwap, params)
             if reason:
-                close(pos, snap.last_close, cycle_now, reason)
+                close(pos, snap.last_close, cycle_now, reason, snap.bar_count)
         # entries
         entries_ok = session.entries_allowed(cycle_now)
         if not entries_ok:
@@ -180,7 +182,8 @@ def replay(day: DayData, params: Params, broker: Optional[ReplayBroker] = None,
         for snap in snaps:
             sym = snap.symbol
             slots = len(positions) < params.max_open_positions
-            sig = evaluate(snap, params, sym in positions, slots, True)
+            sig = evaluate(snap, params, sym in positions, slots, True,
+                           bars_since(snap, exit_bar_count.get(sym)))
             res.signals_evaluated += 1
             if not sig.fired:
                 continue

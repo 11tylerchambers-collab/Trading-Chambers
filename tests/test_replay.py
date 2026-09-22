@@ -143,3 +143,20 @@ def test_replay_broker_spread():
     b = ReplayBroker()
     bid, ask = b.quote(100.0)
     assert ask - bid == pytest.approx(0.02) and b.fill(100.0) == 100.0
+
+
+def test_reentry_cooldown_after_stop_loss():
+    # long fires at 99 (bar 30); bar 31 at 98.4 stops it out while still deviated on heavy volume.
+    closes = [100.0] * 30 + [99.0] + [98.4] * 10
+    vols = [100.0] * 30 + [500.0] * 11
+    day = build_day(D, {"X": bars_from(closes, vols)})
+    # cooldown off: re-entered on the very bar that stopped it out
+    r0 = replay(day, P.replace(reentry_cooldown_bars=0))
+    assert r0.trades[0].exit_reason == "stop_loss"
+    assert r0.trades[1].entry_ts == OPEN + timedelta(minutes=32, seconds=5)
+    # default cooldown of 5 bars: exit at bar count 32, next entry no earlier than bar count 37 (bar 36)
+    r5 = replay(day, P)
+    assert P.reentry_cooldown_bars == 5
+    assert r5.trades[0].exit_reason == "stop_loss" and r5.trades[0].exit_ts == OPEN + timedelta(minutes=32, seconds=5)
+    assert r5.trades[1].entry_ts == OPEN + timedelta(minutes=37, seconds=5)
+    assert r5.signals_fired == len(r5.trades) == 2

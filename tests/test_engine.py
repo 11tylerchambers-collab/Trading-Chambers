@@ -380,3 +380,36 @@ def test_next_cycle_time():
     assert Engine.next_cycle_time(eng, t) == datetime(2026, 9, 22, 10, 0, 5, tzinfo=ET)
     assert Engine.next_cycle_time(eng, t.replace(second=5)) == datetime(2026, 9, 22, 10, 1, 5, tzinfo=ET)
     assert Engine.next_cycle_time(eng, t.replace(second=40)) == datetime(2026, 9, 22, 10, 1, 5, tzinfo=ET)
+
+
+# ---------------------------------------------------------------- re-entry cooldown
+
+def test_cooldown_blocks_same_bar_reentry_and_survives_restart(tmp_path):
+    broker = MockBroker(bars={"AAPL": dip_day_bars()})
+    now = OPEN + timedelta(minutes=31, seconds=5)
+    eng, st, broker, ft = make_engine(tmp_path, now, broker, universe=["AAPL"])
+    eng.startup()
+    eng.run_cycle()                                   # enters long at 99 on bar 30
+    # bar 31 drops to 98.4 on heavy volume: stop_loss, and without a cooldown it would re-enter at once
+    broker.bars["AAPL"].append(Bar(OPEN + timedelta(minutes=31), 98.4, 98.4, 98.4, 98.4, 500.0))
+    broker.prices["AAPL"] = 98.4
+    ft.advance(minutes=1)
+    res = eng.run_cycle()
+    assert st.closed_trades_for_day(D)[0].exit_reason == "stop_loss"
+    assert res.reasons == {"cooldown": 1} and res.signals_fired == 0 and eng.positions == {}
+    assert eng.exit_bar_count == {"AAPL": 32}
+    sig = st.signals_for_day(D)[-1]
+    assert sig["reason"] == "cooldown" and sig["dev_pct"] < -0.3   # numbers still logged
+    # a restarted engine recovers the cooldown from the closed trade
+    eng2 = Engine(Store(tmp_path / "t.db"), broker, make_clock(FakeTime(ft.now), broker), ["AAPL"], CFG,
+                  sleep_fn=lambda s: None)
+    eng2.startup()
+    assert eng2.exit_bar_count == {"AAPL": 32}
+    # four more heavy, deviated bars: still cooling down; the fifth bar after the exit may enter
+    for i in range(32, 37):
+        broker.bars["AAPL"].append(Bar(OPEN + timedelta(minutes=i), 98.4, 98.4, 98.4, 98.4, 500.0))
+        ft.advance(minutes=1)
+        eng2.clock = make_clock(FakeTime(ft.now), broker)
+        r = eng2.run_cycle()
+        assert r.reasons == ({"cooldown": 1} if i < 36 else {"fired": 1}), (i, r.reasons)
+    assert "AAPL" in eng2.positions

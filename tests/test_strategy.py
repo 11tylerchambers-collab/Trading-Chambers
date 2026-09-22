@@ -38,6 +38,7 @@ def test_all_reasons_are_reachable():
     seen["vol_too_low"] = evaluate(with_last(99.0, 100), P, False).reason
     seen["short_disabled"] = evaluate(with_last(101.0, 500), P.replace(allow_short=False), False).reason
     seen["fired"] = evaluate(with_last(99.0, 500), P, False).reason
+    seen["cooldown"] = evaluate(with_last(99.0, 500), P, False, bars_since_exit=0).reason
     for r in REASONS:
         assert seen[r] == r, r
 
@@ -123,3 +124,23 @@ def test_position_qty_and_hypothesis():
     h = hypothesis(sig, P)
     assert h["expect"] == "return to vwap" and h["expect_within_bars"] == 10
     assert h["expect_move_pct"] == pytest.approx(abs(sig.dev_pct), abs=1e-4) and h["dev_pct"] < 0
+
+
+def test_reentry_cooldown():
+    s = with_last(99.0, 500)          # would fire
+    assert P.reentry_cooldown_bars == 5
+    assert evaluate(s, P, False, bars_since_exit=None).reason == "fired"      # no exit today
+    for n in range(5):
+        sig = evaluate(s, P, False, bars_since_exit=n)
+        assert sig.reason == "cooldown" and not sig.fired and sig.dev_pct is not None
+    assert evaluate(s, P, False, bars_since_exit=5).reason == "fired"
+    assert evaluate(s, P.replace(reentry_cooldown_bars=0), False, bars_since_exit=0).reason == "fired"
+    assert evaluate(s, P.replace(reentry_cooldown_bars=1), False, bars_since_exit=0).reason == "cooldown"
+    # precedence: position and window checks win; cooldown beats slots and the entry conditions
+    assert evaluate(s, P, True, bars_since_exit=0).reason == "already_in_position"
+    assert evaluate(s, P, False, entries_allowed=False, bars_since_exit=0).reason == "entries_closed"
+    assert evaluate(s, P, False, slots_available=False, bars_since_exit=0).reason == "cooldown"
+    assert evaluate(with_last(99.9, 500), P, False, bars_since_exit=0).reason == "cooldown"
+    with pytest.raises(ValueError):
+        Params(reentry_cooldown_bars=-1).validate()
+    assert Params.from_dict({"reentry_cooldown_bars": "3"}).reentry_cooldown_bars == 3

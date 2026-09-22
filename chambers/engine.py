@@ -20,7 +20,7 @@ from .broker import BrokerError
 from .clock import ET, MarketClock, Session
 from .data import DataState
 from .store import Bar, Store, Trade
-from .strategy import Params, Signal, evaluate, hypothesis, position_qty
+from .strategy import Params, Signal, bars_since, evaluate, hypothesis, position_qty
 
 log = logging.getLogger("chambers.engine")
 
@@ -143,6 +143,7 @@ class Engine:
         self.params: Params = self.config_params
         self.data = DataState(self.universe)
         self.positions: dict[str, Position] = {}
+        self.exit_bar_count: dict[str, int] = {}   # symbol -> bar_count when it last exited (today)
         self.state = "idle"
         self._sleep = sleep_fn
         self._sweep_fn = sweep_fn
@@ -227,6 +228,7 @@ class Engine:
                 self.seed_bars(session)
             except Exception as e:
                 self._log_error("startup.seed_bars", e)
+            self._rebuild_cooldowns(session)
         self.reconcile()
         self._write_heartbeat()
 
@@ -239,6 +241,7 @@ class Engine:
             self.seed_bars(session)
         except Exception as e:
             self._log_error("preopen.seed_bars", e)
+        self._rebuild_cooldowns(session)
         self.reconcile()
         self._preopen_done = session.date
         self._write_heartbeat()
@@ -246,9 +249,21 @@ class Engine:
     def _ensure_data_day(self, session: Session) -> None:
         if self._data_day != session.date:
             self.data.reset()
+            self.exit_bar_count = {}
             self._data_day = session.date
             for sym, bars in self.store.bars_for_day(session.date).items():
                 self.data.update(sym, bars)
+
+    def _rebuild_cooldowns(self, session: Session) -> None:
+        """After a restart: recover each symbol's bar count at its last exit today from closed trades.
+        An exit at cycle hh:mm:05 acted on the bars before hh:mm:00."""
+        for t in self.store.closed_trades_for_day(session.date):
+            st = self.data.states.get(t.symbol)
+            if st is None or not t.exit_ts:
+                continue
+            cutoff = datetime.fromisoformat(t.exit_ts).astimezone(ET).replace(second=0, microsecond=0)
+            n = sum(1 for b in st.bars if b.ts < cutoff)
+            self.exit_bar_count[t.symbol] = max(n, self.exit_bar_count.get(t.symbol, 0))
 
     def _bars_end_bound(self, now: datetime) -> datetime:
         """Exclude the minute that is still forming."""
@@ -393,6 +408,8 @@ class Engine:
             self.store.close_trade(pos.trade_id, now, exit_price, oid, exit_bid, exit_ask, reason,
                                    pos.bars_held, pos.mae_pct, pos.mfe_pct, gross, cost, net)
         self.positions.pop(pos.symbol, None)
+        st = self.data.states.get(pos.symbol)
+        self.exit_bar_count[pos.symbol] = st.bar_count if st else 0
         self.counters["closed_today"] += 1
         log.info("CLOSE %s %s x%d @ %.4f %s bars=%d gross=%.2f cost=%.2f net=%.2f", pos.side, pos.symbol,
                  pos.qty, exit_price, reason, pos.bars_held, gross, cost, net)
@@ -471,7 +488,8 @@ class Engine:
                 try:
                     st = self.data[sym]
                     slots = len(self.positions) < self.params.max_open_positions
-                    sig = evaluate(st, self.params, sym in self.positions, slots, entries_ok)
+                    sig = evaluate(st, self.params, sym in self.positions, slots, entries_ok,
+                                   bars_since(st, self.exit_bar_count.get(sym)))
                     res.symbols_evaluated += 1
                     res.reasons[sig.reason] = res.reasons.get(sig.reason, 0) + 1
                     row = sig.to_row()

@@ -9,10 +9,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 REASONS = ("fired", "no_position_slot", "already_in_position", "dev_too_small", "vol_too_low",
-           "short_disabled", "insufficient_bars", "entries_closed")
+           "short_disabled", "insufficient_bars", "entries_closed", "cooldown")
 
 PARAM_KEYS = ("entry_dev_pct", "vol_mult", "max_hold_bars", "stop_pct", "allow_short",
-              "notional_per_trade", "max_open_positions", "min_bars_before_entry")
+              "notional_per_trade", "max_open_positions", "min_bars_before_entry", "reentry_cooldown_bars")
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,7 @@ class Params:
     notional_per_trade: float = 2000.0
     max_open_positions: int = 20
     min_bars_before_entry: int = 20
+    reentry_cooldown_bars: int = 5   # bars after an exit before the same symbol may be entered again
 
     @classmethod
     def from_dict(cls, d: dict) -> "Params":
@@ -41,6 +42,7 @@ class Params:
             notional_per_trade=float(base["notional_per_trade"]),
             max_open_positions=int(base["max_open_positions"]),
             min_bars_before_entry=int(base["min_bars_before_entry"]),
+            reentry_cooldown_bars=int(base["reentry_cooldown_bars"]),
         )
 
     def to_dict(self) -> dict:
@@ -58,6 +60,8 @@ class Params:
             raise ValueError("max_hold_bars, max_open_positions and min_bars_before_entry must be >= 1")
         if self.notional_per_trade <= 0:
             raise ValueError("notional_per_trade must be > 0")
+        if self.reentry_cooldown_bars < 0:
+            raise ValueError("reentry_cooldown_bars must be >= 0")
 
 
 def _as_bool(v) -> bool:
@@ -82,13 +86,23 @@ class Signal:
                 "vol_ratio": self.vol_ratio, "side": self.side, "fired": self.fired, "reason": self.reason}
 
 
+def bars_since(symbol_state, exit_bar_count: Optional[int]) -> Optional[int]:
+    """Bars completed since the last exit on this symbol (None if it has not exited today)."""
+    if exit_bar_count is None:
+        return None
+    return symbol_state.bar_count - exit_bar_count
+
+
 def evaluate(symbol_state, params: Params, has_open_position: bool,
-             slots_available: bool = True, entries_allowed: bool = True) -> Signal:
+             slots_available: bool = True, entries_allowed: bool = True,
+             bars_since_exit: Optional[int] = None) -> Signal:
     """Entry decision for one symbol on its latest completed bar.
 
     Gates are checked in this order and the first failing one is the reason:
-    entries_closed → insufficient_bars → already_in_position → no_position_slot →
+    entries_closed → insufficient_bars → already_in_position → cooldown → no_position_slot →
     dev_too_small → vol_too_low → short_disabled → fired.
+    `cooldown`: fewer than `reentry_cooldown_bars` bars have completed since this symbol's last exit
+    (the exit bar itself counts as 0, so a value of 1 blocks only same-bar re-entry; 0 disables).
     Price/vwap/dev/vol are filled in whenever they can be computed, whatever the reason,
     so non-fires carry the same information as fires.
     """
@@ -107,6 +121,8 @@ def evaluate(symbol_state, params: Params, has_open_position: bool,
         return out("insufficient_bars")
     if has_open_position:
         return out("already_in_position")
+    if bars_since_exit is not None and bars_since_exit < params.reentry_cooldown_bars:
+        return out("cooldown")
     if not slots_available:
         return out("no_position_slot")
 
