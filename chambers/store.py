@@ -317,6 +317,13 @@ class Store:
             (iso(exit_ts), exit_price, exit_order_id, exit_bid, exit_ask, exit_reason,
              bars_held, mae_pct, mfe_pct, gross_pnl, est_cost, net_pnl, trade_id))
 
+    def update_trade_economics(self, trade_id: int, gross_pnl: float, est_cost: float, net_pnl: float) -> None:
+        self._exec("UPDATE trades SET gross_pnl=?, est_cost=?, net_pnl=? WHERE id=?",
+                   (gross_pnl, est_cost, net_pnl, trade_id))
+
+    def all_closed_trades(self) -> list[Trade]:
+        return [self._trade(r) for r in self._query("SELECT * FROM trades WHERE exit_ts IS NOT NULL ORDER BY id")]
+
     def _trade(self, r: sqlite3.Row) -> Trade:
         return Trade(**{k: r[k] for k in r.keys()})
 

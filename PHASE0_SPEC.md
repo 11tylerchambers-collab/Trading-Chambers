@@ -218,7 +218,7 @@ Cycle runs at `hh:mm:05` ET for every minute from `session_open` to `flatten_at`
 
 Rules:
 - One open position per symbol.
-- `est_cost` for a trade = `(ask − bid)/2` at entry + `(ask − bid)/2` at exit, per share, × qty, plus `0.01% × notional × 2` slippage assumption. Log the raw bid/ask at both ends.
+- `est_cost` for a live trade = `|fill − quote mid|` at entry + `|fill − quote mid|` at exit, per share, × qty, plus `0.01% × notional × 2` slippage assumption. Log the raw bid/ask at both ends. `net_pnl` for a live trade = `gross_pnl − 0.01% × notional × 2`: live `gross_pnl` comes from real fills, which already carry the spread, so the fill-vs-mid part of `est_cost` is recorded as a diagnostic and not subtracted again. *(Amended 2026-09-23. The original rule, half the quoted spread at each end subtracted from a fill-based gross, counted the spread twice and used IEX quotes that are often far wider than the market; see DECISIONS.md.)*
 - Any exception inside a cycle is caught, logged to `errors`, counted in `cycles.errors`, and the loop continues. **The process must never die from a strategy or broker error.** Only a fatal startup condition (bad keys, `ALPACA_PAPER != true`) exits.
 - If a bars fetch fails, skip evaluations that cycle but still write the `cycles` row with `errors ≥ 1`.
 
@@ -261,7 +261,7 @@ All timestamps stored as ISO-8601 strings with offset. Provide typed read/write 
 
 ## 10. Nightly sweep (`sweep.py`) and replay (`replay.py`)
 
-**Replay** runs the exact `strategy.py` and the exact exit logic from `engine.py` over stored `bars` with a mock broker that fills at the bar close and charges `est_cost` using a fixed spread assumption of 0.02% (no quotes in replay). Replay and live must share the same strategy and exit code paths — no duplicated logic. `python -m chambers.main --replay 2026-09-22` prints the trade list and summary.
+**Replay** runs the exact `strategy.py` and the exact exit logic from `engine.py` over stored `bars` with a mock broker that fills at the bar close and charges `est_cost` using a fixed spread assumption of 0.02% (no quotes in replay); because replay fills are at the close, not a real fill, replay keeps `est_cost = half spread at each end × qty + slippage` and `net_pnl = gross_pnl − est_cost`. Replay and live must share the same strategy and exit code paths — no duplicated logic. `python -m chambers.main --replay 2026-09-22` prints the trade list and summary using the live params; `--params entry_dev_pct=0.30,vol_mult=1.50` overrides any of them for that replay only.
 
 **Sweep** runs at `sweep_at`:
 

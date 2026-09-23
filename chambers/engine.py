@@ -2,7 +2,8 @@
 
 The pure pieces at the top of this module (`Position`, `check_exit`,
 `trade_economics`) are the single exit/accounting code path. `replay.py`
-imports them so replay and live can never drift apart.
+imports them so replay and live can never drift apart. Live trades are costed
+with `live_trade_economics` instead, because their prices are real fills.
 
 States: idle → preopen → running → flattening → postclose → sweeping → idle
 """
@@ -99,7 +100,7 @@ def half_spread(bid: Optional[float], ask: Optional[float]) -> float:
 def trade_economics(side: str, qty: int, entry_price: float, exit_price: float,
                     entry_bid: Optional[float], entry_ask: Optional[float],
                     exit_bid: Optional[float], exit_ask: Optional[float]) -> tuple[float, float, float]:
-    """(gross_pnl, est_cost, net_pnl).
+    """(gross_pnl, est_cost, net_pnl) for replay, whose fills are at the bar close.
     est_cost = (half spread at entry + half spread at exit) × qty + 0.01% × notional × 2."""
     if side == "long":
         gross = (exit_price - entry_price) * qty
@@ -108,6 +109,30 @@ def trade_economics(side: str, qty: int, entry_price: float, exit_price: float,
     notional = entry_price * qty
     cost = (half_spread(entry_bid, entry_ask) + half_spread(exit_bid, exit_ask)) * qty + SLIPPAGE_RATE * notional * 2
     return gross, cost, gross - cost
+
+
+def fill_vs_mid(price: float, bid: Optional[float], ask: Optional[float]) -> float:
+    """|fill − quote mid| per share; 0 when the quote is missing or crossed."""
+    if bid is None or ask is None or ask < bid:
+        return 0.0
+    return abs(price - (bid + ask) / 2.0)
+
+
+def live_trade_economics(side: str, qty: int, entry_price: float, exit_price: float,
+                         entry_bid: Optional[float], entry_ask: Optional[float],
+                         exit_bid: Optional[float], exit_ask: Optional[float]) -> tuple[float, float, float]:
+    """(gross_pnl, est_cost, net_pnl) for a live trade, whose prices are real broker fills.
+    est_cost = (|entry fill − mid| + |exit fill − mid|) × qty + 0.01% × notional × 2, recorded as a
+    diagnostic. Real fills already carry the spread, so net_pnl = gross − the slippage term only;
+    subtracting the fill-vs-mid term as well would count it twice (DECISIONS.md)."""
+    if side == "long":
+        gross = (exit_price - entry_price) * qty
+    else:
+        gross = (entry_price - exit_price) * qty
+    slippage = SLIPPAGE_RATE * entry_price * qty * 2
+    cost = (fill_vs_mid(entry_price, entry_bid, entry_ask) + fill_vs_mid(exit_price, exit_bid, exit_ask)) * qty \
+        + slippage
+    return gross, cost, gross - slippage
 
 
 # ==========================================================================
@@ -309,7 +334,7 @@ class Engine:
                 # open trade in store, no broker position → close the record
                 st = self.data.states.get(t.symbol)
                 px = (st.last_close if st and st.last_close else None) or t.entry_price
-                gross, cost, net = trade_economics(t.side, t.qty, t.entry_price, px, t.entry_bid, t.entry_ask, None, None)
+                gross, cost, net = live_trade_economics(t.side, t.qty, t.entry_price, px, t.entry_bid, t.entry_ask, None, None)
                 self.store.close_trade(t.id, now, px, None, None, None, "reconcile_missing",
                                        t.bars_held, t.mae_pct, t.mfe_pct, gross, cost, net)
                 self.counters["closed_today"] += 1
@@ -402,8 +427,8 @@ class Engine:
     def _record_close(self, pos: Position, reason: str, exit_price: float, oid: Optional[str],
                       exit_bid: Optional[float], exit_ask: Optional[float], now: datetime) -> None:
         pos.update_excursion(exit_price)
-        gross, cost, net = trade_economics(pos.side, pos.qty, pos.entry_price, exit_price,
-                                           pos.entry_bid, pos.entry_ask, exit_bid, exit_ask)
+        gross, cost, net = live_trade_economics(pos.side, pos.qty, pos.entry_price, exit_price,
+                                                pos.entry_bid, pos.entry_ask, exit_bid, exit_ask)
         if pos.trade_id is not None:
             self.store.close_trade(pos.trade_id, now, exit_price, oid, exit_bid, exit_ask, reason,
                                    pos.bars_held, pos.mae_pct, pos.mfe_pct, gross, cost, net)
@@ -551,8 +576,8 @@ class Engine:
                     # a store trade whose close_position failed above, or an orphan
                     tr = next((t for t in self.store.open_trades() if t.symbol == sym), None)
                     if tr is not None:
-                        gross, cost, net = trade_economics(tr.side, tr.qty, tr.entry_price, px or tr.entry_price,
-                                                           tr.entry_bid, tr.entry_ask, None, None)
+                        gross, cost, net = live_trade_economics(tr.side, tr.qty, tr.entry_price, px or tr.entry_price,
+                                                                tr.entry_bid, tr.entry_ask, None, None)
                         self.store.close_trade(tr.id, now, px or tr.entry_price, None, None, None, "eod_safety_net",
                                                tr.bars_held, tr.mae_pct, tr.mfe_pct, gross, cost, net)
                         self.counters["closed_today"] += 1

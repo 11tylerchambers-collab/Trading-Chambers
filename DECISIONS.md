@@ -104,3 +104,17 @@ Each entry: what was ambiguous or unstated, what I chose, and why. Ordered by bu
 - **All exit reasons count**, including `vwap_touch` (harmless: at VWAP the entry rule cannot fire anyway), `manual_flatten` and `eod_safety_net`. `reconcile_missing` does not, because no bar-level exit happened.
 - **Not in the sweep grid.** The §10 grid is unchanged; the sweep carries the live cooldown value through every combination.
 - **Effect on the gate.** A cooldown lowers trade count. If §13.2 (≥ 30 closed trades/day) is hard to reach, lower it from the dashboard; no restart needed.
+
+## Live trade costing (owner request, 2026-09-23)
+
+- **What was wrong.** §8 set live `est_cost` to half the quoted bid/ask spread at each end plus 0.01% slippage per side, and `net_pnl = gross_pnl − est_cost`. Live `gross_pnl` is computed from real broker fills, which already include whatever the spread cost, so the spread was counted twice. The quotes also come from the IEX feed, whose spread is often far wider than the whole market (on 2026-09-23 the median was 8.9 bps, the mean 59 bps and the worst 1,007 bps; CRM's median was about 500 bps).
+- **Effect on 2026-09-23 (171 trades).** Live `net_pnl` was −$1,912.31 against an actual paper-account equity change of +$37.62. Almost all of the difference was the half-spread term ($1,887.51).
+- **What changed.** Live trades now use `engine.live_trade_economics`. `est_cost = (|entry fill − mid| + |exit fill − mid|) × qty + 0.01% × notional × 2` is stored as a diagnostic of execution quality. `net_pnl = gross_pnl − 0.01% × notional × 2`: only the slippage assumption is subtracted, because the fill-vs-mid part is already inside `gross_pnl`. The owner chose this over subtracting the full `est_cost`, which would still have counted the fill-vs-mid amount twice. With `|·|`, a fill better than mid still adds to `est_cost`; that is intended for a diagnostic, and it does not affect `net_pnl`.
+- **Missing quotes.** A leg with no quote, or a crossed quote, contributes 0 to the fill-vs-mid term. Closes that are not real fills (`reconcile_missing`, `eod_safety_net`) have no exit quote, so their exit leg is slippage only.
+- **Replay and the sweep are unchanged.** Replay fills at the bar close, which is roughly the mid, so its half-spread cost is still an honest estimate and `net_pnl = gross_pnl − est_cost` still applies there. Replay keeps using `trade_economics`, so live and replay no longer share the cost function. They still share the strategy and exit code.
+- **Backfill.** `python -m chambers.main --recompute-costs` re-costs every closed trade from its stored fills and quotes, and is safe to run more than once. It was run once on 2026-09-23 after the close.
+- **Known limitation.** IEX mids are still used for the diagnostic `est_cost`, so that number is noisy for symbols with stale or wide IEX quotes. Replacing or filtering the quote source is deferred to Phase 1A.
+
+## --replay --params (owner request, 2026-09-23)
+
+- `--replay` uses the current `params` row, which the nightly sweep may already have moved by the time you replay the same day. `--params k=v,k=v` overrides any key in `PARAM_KEYS` for that replay only; unspecified keys keep their live values. Unknown keys or entries without `=` are rejected before the database is opened. `--params` without `--replay` is an error. Nothing is written.

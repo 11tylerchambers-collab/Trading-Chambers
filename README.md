@@ -25,6 +25,8 @@ cp .env.example .env            # ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_PAPE
 | `--smoke` | Prints account, market clock, 3 AAPL bars, a SPY quote |
 | `--once` | Runs one cycle now and exits (after hours: 20 `entries_closed` signals) |
 | `--replay YYYY-MM-DD` | Replays stored bars for that day with the live params; prints trades and summary |
+| `--replay YYYY-MM-DD --params k=v,...` | Same, overriding some params, e.g. `entry_dev_pct=0.30,vol_mult=1.50` |
+| `--recompute-costs` | Re-costs every closed live trade from its stored fills and quotes |
 | `--sweep` | Runs the nightly grid sweep now |
 | `--gate` | Phase 0 acceptance checks 1–6 over the last 5 sessions, PASS/FAIL per item |
 

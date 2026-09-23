@@ -95,8 +95,11 @@ def test_entry_then_vwap_touch_exit(tmp_path):
     c = closed[0]
     assert c.exit_reason == "vwap_touch" and c.exit_price == 100.5 and c.bars_held == 1
     assert c.gross_pnl == pytest.approx(1.5 * 20)
-    assert c.est_cost == pytest.approx((0.01 + 0.01) * 20 + 0.0001 * 99.0 * 20 * 2)
-    assert c.net_pnl == pytest.approx(c.gross_pnl - c.est_cost)
+    # live costing: the mock fills at the quote mid, so |fill − mid| = 0 and est_cost is slippage only;
+    # net subtracts only the slippage term because real fills already carry the spread
+    slippage = 0.0001 * 99.0 * 20 * 2
+    assert c.est_cost == pytest.approx(slippage)
+    assert c.net_pnl == pytest.approx(c.gross_pnl - slippage)
     assert c.mfe_pct == pytest.approx((100.5 - 99) / 99 * 100) and c.mae_pct == 0.0
     assert c.hypothesis_json and c.exit_bid == pytest.approx(100.49)
     # the exit bar was also evaluated for a fresh entry (not fired: dev small) → 20 signals again

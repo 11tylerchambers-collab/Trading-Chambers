@@ -3,7 +3,8 @@
     python -m chambers.main             run the engine + dashboard (the service)
     python -m chambers.main --smoke     account, 3 AAPL bars, SPY quote
     python -m chambers.main --once      one live cycle now, then exit
-    python -m chambers.main --replay YYYY-MM-DD
+    python -m chambers.main --replay YYYY-MM-DD [--params k=v,k=v]
+    python -m chambers.main --recompute-costs   re-cost every closed live trade (live_trade_economics)
     python -m chambers.main --sweep     run the nightly sweep now
     python -m chambers.main --gate      Phase 0 acceptance checks 1-6
 """
@@ -16,6 +17,7 @@ import os
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -180,14 +182,52 @@ def current_params(store, cfg: dict):
     return Params.from_dict(live["params"] if live else cfg["strategy"])
 
 
-def cmd_replay(day: str) -> int:
+def apply_param_overrides(base, text: Optional[str]):
+    """`entry_dev_pct=0.30,vol_mult=1.5` → base Params with those keys replaced. Unknown keys raise."""
+    from .strategy import PARAM_KEYS
+    if not text:
+        return base
+    overrides = {}
+    for part in text.split(","):
+        if not part.strip():
+            continue
+        key, sep, value = part.partition("=")
+        key = key.strip()
+        if not sep or key not in PARAM_KEYS:
+            raise ValueError(f"bad --params entry {part!r}; expected key=value with key in {', '.join(PARAM_KEYS)}")
+        overrides[key] = value.strip()
+    return base.replace(**overrides)
+
+
+def cmd_replay(day: str, params_text: Optional[str] = None) -> int:
     from .replay import replay_day, format_replay
     cfg = load_config()
     store, broker, clock = optional_runtime()
     d = date.fromisoformat(day)
     sess = sessions_for(clock, [day]).get(d)
-    res = replay_day(store, d, current_params(store, cfg), sess)
+    res = replay_day(store, d, apply_param_overrides(current_params(store, cfg), params_text), sess)
     print(format_replay(res))
+    return 0
+
+
+def recompute_costs(store) -> tuple[int, float, float]:
+    """Re-cost every closed live trade with `live_trade_economics`. Returns (trades, old net sum, new net sum)."""
+    from .engine import live_trade_economics
+    old = new = 0.0
+    trades = store.all_closed_trades()
+    for t in trades:
+        gross, cost, net = live_trade_economics(t.side, t.qty, t.entry_price, t.exit_price,
+                                                t.entry_bid, t.entry_ask, t.exit_bid, t.exit_ask)
+        store.update_trade_economics(t.id, gross, cost, net)
+        old += t.net_pnl or 0.0
+        new += net
+    return len(trades), old, new
+
+
+def cmd_recompute_costs() -> int:
+    from .store import Store
+    n, old, new = recompute_costs(Store(DB_PATH))
+    print(f"recomputed {n} closed trades: net_pnl sum {old:.2f} -> {new:.2f}")
     return 0
 
 
@@ -244,16 +284,27 @@ def main(argv=None) -> int:
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--replay", metavar="YYYY-MM-DD")
+    ap.add_argument("--params", metavar="k=v,k=v", help="with --replay: override the live params")
+    ap.add_argument("--recompute-costs", action="store_true")
     ap.add_argument("--sweep", action="store_true")
     ap.add_argument("--gate", action="store_true")
     args = ap.parse_args(argv)
-    setup_logging(to_file=not (args.smoke or args.replay or args.gate))
+    if args.params and not args.replay:
+        ap.error("--params only applies to --replay")
+    setup_logging(to_file=not (args.smoke or args.replay or args.gate or args.recompute_costs))
     if args.smoke:
         return cmd_smoke()
     if args.once:
         return cmd_once()
     if args.replay:
-        return cmd_replay(args.replay)
+        from .strategy import Params
+        try:
+            apply_param_overrides(Params(), args.params)   # validate before touching the DB
+        except ValueError as e:
+            ap.error(str(e))
+        return cmd_replay(args.replay, args.params)
+    if args.recompute_costs:
+        return cmd_recompute_costs()
     if args.sweep:
         return cmd_sweep()
     if args.gate:
