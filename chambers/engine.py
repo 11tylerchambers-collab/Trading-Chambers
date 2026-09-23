@@ -683,8 +683,13 @@ class Engine:
             self._wait_until(session.sweep_at)
             return
         if self._swept != session.date:
-            self.set_state("sweeping")
-            self.run_sweep(session)
+            # `_swept` is lost on restart; the params_history row is the durable record that the
+            # sweep ran, so a restart after sweep_at must not sweep (and step params) a second time.
+            if self.store.has_sweep_for(session.date):
+                log.info("sweep for %s already in params_history; skipping", session.date)
+            else:
+                self.set_state("sweeping")
+                self.run_sweep(session)
             self._swept = session.date
             self.set_state("idle")
             return

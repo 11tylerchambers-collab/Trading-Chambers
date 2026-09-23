@@ -416,3 +416,46 @@ def test_cooldown_blocks_same_bar_reentry_and_survives_restart(tmp_path):
         r = eng2.run_cycle()
         assert r.reasons == ({"cooldown": 1} if i < 36 else {"fired": 1}), (i, r.reasons)
     assert "AAPL" in eng2.positions
+
+
+def test_restart_after_sweep_does_not_sweep_again(tmp_path):
+    """A restart after sweep_at loses the in-memory `_swept`; the params_history row must stop a second sweep."""
+    broker = MockBroker(bars={"AAPL": flat_bars(100.0, OPEN, 400)})
+    ft = FakeTime(datetime(2026, 9, 22, 16, 30, tzinfo=ET))
+    st = Store(tmp_path / "t.db")
+    sweeps = []
+
+    def fake_sweep(store, params, d, now):
+        sweeps.append(d)
+        store.write_params_history(d, params.to_dict(), "sweep", {"reason": "test"})  # what run_sweep writes
+        return {"reason": "test"}
+
+    eng = Engine(st, broker, make_clock(ft, broker), ["AAPL"], CFG, sleep_fn=ft.sleep, sweep_fn=fake_sweep)
+    eng.startup()
+    eng.tick()                                  # flatten (first process after close)
+    eng.tick()                                  # sweep at 16:30
+    assert sweeps == [D] and eng._swept == D
+
+    # restart at 17:03 with a fresh engine: flatten runs again (harmless), the sweep must not
+    ft.now = datetime(2026, 9, 22, 17, 3, tzinfo=ET)
+    eng2 = Engine(st, broker, make_clock(ft, broker), ["AAPL"], CFG, sleep_fn=ft.sleep, sweep_fn=fake_sweep)
+    eng2.startup()
+    states = []
+    orig = eng2.set_state
+    eng2.set_state = lambda s: (states.append(s), orig(s))[1]
+    for _ in range(3):
+        eng2.tick()
+    assert sweeps == [D]                        # still exactly one sweep
+    assert "sweeping" not in states and eng2._swept == D and eng2.state == "idle"
+    assert len(st.params_history(7, source="sweep")) == 1
+    assert st.errors_count(where="unhandled") == 0
+
+
+def test_manual_param_edit_after_sweep_still_counts_as_swept(tmp_path):
+    ft = FakeTime(datetime(2026, 9, 22, 18, 0, tzinfo=ET))
+    st = Store(tmp_path / "t.db")
+    st.write_params_history(D, Params().to_dict(), "manual", None)
+    assert st.has_sweep_for(D) is False          # a manual row alone is not a sweep
+    st.write_params_history(D, Params().to_dict(), "sweep", {"reason": "test"})
+    st.write_params_history(D, Params().to_dict(), "manual", None)
+    assert st.has_sweep_for(D) is True and st.has_sweep_for("2026-09-23") is False

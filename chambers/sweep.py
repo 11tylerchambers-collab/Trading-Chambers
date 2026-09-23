@@ -84,8 +84,15 @@ def load_days(store: Store, dates: list[str], sessions: Optional[dict[date, Sess
 def run_sweep(store: Store, current: Params, today: date, now: datetime,
               sessions: Optional[dict[date, Session]] = None,
               min_today_trades: int = MIN_TODAY_TRADES, n_days: int = N_DAYS) -> dict:
-    """Run the sweep, write `params` (only if changed) and `params_history`. Returns the summary."""
+    """Run the sweep, write `params` (only if changed) and `params_history`. Returns the summary.
+    Idempotent per session date: if a sweep row for `today` already exists, nothing is evaluated or written."""
     t0 = time.monotonic()
+    if store.has_sweep_for(today):
+        log.info("sweep %s: already_swept; skipping", today)
+        return {"date": today.isoformat(), "days": [], "current": current.to_dict(), "combos_evaluated": 0,
+                "eligible": 0, "best": None, "best_score": None, "chosen": current.to_dict(), "changed": False,
+                "reason": "already_swept: a sweep row for this date exists in params_history; params unchanged",
+                "results": [], "duration_s": 0.0}
     dates = store.bar_dates(n_days)
     today_closed = len(store.closed_trades_for_day(today))
     summary: dict = {"date": today.isoformat(), "days": dates, "current": current.to_dict(),

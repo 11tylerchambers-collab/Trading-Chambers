@@ -438,6 +438,11 @@ class Store:
                         "sweep_summary": json.loads(r["sweep_summary_json"]) if r["sweep_summary_json"] else None})
         return out
 
+    def has_sweep_for(self, d: date | str) -> bool:
+        """True if a nightly sweep already wrote its params_history row for session date `d`."""
+        return self._one("SELECT 1 FROM params_history WHERE source='sweep' AND date=? LIMIT 1",
+                         (_date_str(d),)) is not None
+
     def params_history_dates(self, source: str = "sweep") -> list[str]:
         return [r["date"] for r in self._query(
             "SELECT DISTINCT date FROM params_history WHERE source=? ORDER BY date", (source,))]

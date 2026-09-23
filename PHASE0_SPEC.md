@@ -276,6 +276,7 @@ All timestamps stored as ISO-8601 strings with offset. Provide typed read/write 
 5. Do not change params if today produced fewer than 20 closed trades (insufficient evidence).
 6. Write the chosen params to `params` (source = `sweep`) and a full summary (all combos, scores, trade counts, chosen, reason) to `params_history`.
 7. Engine reads `params` at `preopen` the next day.
+8. At most one sweep per session date. Before running, check `params_history` for a `source = sweep` row with that date; if one exists, skip (a restart after `sweep_at` must not step params a second time). *(Added 2026-09-23.)*
 
 The sweep must finish in under 10 minutes on a 2-core machine. Vectorize the hot loop if needed, but keep the strategy logic shared.
 

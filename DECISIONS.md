@@ -118,3 +118,12 @@ Each entry: what was ambiguous or unstated, what I chose, and why. Ordered by bu
 ## --replay --params (owner request, 2026-09-23)
 
 - `--replay` uses the current `params` row, which the nightly sweep may already have moved by the time you replay the same day. `--params k=v,k=v` overrides any key in `PARAM_KEYS` for that replay only; unspecified keys keep their live values. Unknown keys or entries without `=` are rejected before the database is opened. `--params` without `--replay` is an error. Nothing is written.
+
+## Sweep idempotency (owner request, 2026-09-23)
+
+- **What was wrong.** The engine remembered "swept today" only in memory (`Engine._swept`). A service restart at 17:03 ET on 2026-09-23 ran the sweep a second time and moved `entry_dev_pct` 0.40 → 0.50 and `vol_mult` 1.25 → 1.00, two steps from the day's live params, against the §10 one-step rule. The owner restored the 16:30 result from the dashboard (history id 5, `manual`).
+- **What changed.** `store.has_sweep_for(date)` checks for a `source = sweep` row in `params_history`. The engine checks it before entering `sweeping`: if the row exists it logs a skip, marks the date swept and goes idle, never showing `sweeping`. `sweep.run_sweep` checks it too and returns `already_swept` without evaluating or writing anything, so `--sweep` cannot double-step either.
+- **Why `params_history` and not a new column or file.** Every sweep outcome, including `insufficient_evidence` and `no_data`, already writes exactly one `sweep` row, so the row is a complete record that the sweep happened. A `manual` row does not count.
+- **Consequences.** A sweep that crashes before writing its row will run again on restart, which is the desired retry. To force a re-sweep for a date on purpose, delete that date's `sweep` row first.
+- **Not changed.** A restart after the close still passes through `flattening` once, which with no positions only calls `close_all_positions()` and `cancel_all()`.
+

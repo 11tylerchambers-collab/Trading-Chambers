@@ -133,3 +133,22 @@ def test_eligibility_threshold_and_scores(tmp_path):
     assert r_fire["trades"] >= 20 and r_fire["eligible"]
     r_none = next(r for r in results if r["params"]["entry_dev_pct"] == 0.80 and r["params"]["vol_mult"] == 2.0)
     assert r_none["trades"] == 0 and not r_none["eligible"]
+
+
+def test_sweep_is_idempotent_per_date(tmp_path):
+    st = Store(tmp_path / "t.db")
+    d = date(2026, 9, 22)
+    synthetic_day(st, d, ["A", "B", "C", "D"])
+    seed_closed_trades(st, d, 25)
+    cur = Params(entry_dev_pct=0.80)
+    st.write_params(cur.to_dict(), "manual", NOW - timedelta(hours=1))
+    first = run_sweep(st, cur, d, NOW)
+    after_first = st.read_params()
+    second = run_sweep(st, Params.from_dict(after_first["params"]), d, NOW + timedelta(minutes=33))
+    assert second["reason"].startswith("already_swept") and second["changed"] is False
+    assert second["combos_evaluated"] == 0
+    assert st.read_params() == after_first                   # no second step
+    assert len(st.params_history(7, source="sweep")) == 1    # no second row
+    # the next session date sweeps normally
+    assert not run_sweep(st, cur, date(2026, 9, 23), NOW + timedelta(days=1))["reason"].startswith("already_swept")
+    assert first["reason"]  # first run did real work
