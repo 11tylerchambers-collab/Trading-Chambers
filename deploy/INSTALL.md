@@ -120,8 +120,53 @@ forwarding, no TLS setup.
 The password is still required on the Tailscale network. Tokens live in
 memory only; a host restart logs every browser out.
 
-Optional: `sudo ufw allow in on tailscale0 to any port 8080` and
-`sudo ufw deny 8080` to make sure 8080 is reachable only via Tailscale.
+### B.1 Firewall: Tailscale only
+
+Lock the host down so that nothing, SSH included, is reachable from the
+public internet. Do this only **after** you have confirmed SSH works over the
+Tailscale IP (`ssh root@100.x.y.z`) and that `tailscaled` starts on boot
+(`systemctl is-enabled tailscaled` → `enabled`).
+
+```bash
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow in on tailscale0      # SSH, dashboard, everything, over Tailscale only
+sudo ufw --force enable
+sudo ufw status verbose              # only the two "on tailscale0" rules (v4 + v6)
+```
+
+If you enabled ufw earlier with `ufw allow OpenSSH`, remove it with
+`sudo ufw delete allow OpenSSH` (removes the v4 and v6 rules). Existing
+sessions survive; new public connections are refused.
+
+Verify from outside, not from the host itself (local traffic bypasses the
+firewall): an external TCP check of `<public IP>:22` and `:8080`, for example
+check-host.net, should time out.
+
+### B.2 Lockout fallback: DigitalOcean Recovery Console
+
+If Tailscale is down, logged out, or its node key expired, SSH is unreachable
+by design. Get in through the provider's out-of-band console instead:
+
+1. DigitalOcean control panel → the droplet → **Access** → **Launch Recovery
+   Console**. This is a virtual screen attached to the VM. It does not use the
+   network or SSH, so ufw does not affect it.
+2. Log in as `root` with the **root password**. Key-only access does not work
+   here. If you never set one, use **Access → Reset Root Password** (DigitalOcean
+   emails a new one; this reboots the droplet, and the engine reconciles on
+   start), or set one now while you still have SSH: `sudo passwd root`.
+3. Fix Tailscale: `systemctl status tailscaled`, `tailscale status`, and
+   `tailscale up` to log in again (open the printed URL on your phone).
+4. As a last resort, reopen public SSH temporarily with `ufw allow OpenSSH`, then
+   `ufw delete allow OpenSSH` once you are back in over Tailscale.
+
+The **Droplet Console** button (the browser-based one, not Recovery) connects
+over SSH on port 22 through DigitalOcean's agent, so expect it to fail while
+public SSH is closed. Use Recovery Console.
+
+To avoid the most common lockout, disable key expiry for this machine in the
+Tailscale admin console (Machines → the host → **Disable key expiry**). By
+default node keys expire after 180 days.
 
 ---
 
