@@ -45,6 +45,9 @@ class FakeTrading:
     def cancel_orders(self):
         self.cancelled = True
 
+    def cancel_order_by_id(self, oid):
+        self.cancelled_ids = getattr(self, "cancelled_ids", []) + [oid]
+
     def get_clock(self):
         return SimpleNamespace(timestamp=datetime(2026, 9, 22, 14, 0, tzinfo=UTC), is_open=True,
                                next_open=datetime(2026, 9, 23, 13, 30, tzinfo=UTC),
@@ -105,6 +108,8 @@ def test_orders(tmp_path):
     assert st["filled_at"].tzinfo is not None and st["filled_at"].hour == 10  # converted to ET
     b.cancel_all()
     assert b._trading.cancelled
+    b.cancel_order("ord-1")
+    assert b._trading.cancelled_ids == ["ord-1"]
     assert b.open_orders() == []
 
 

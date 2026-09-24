@@ -13,7 +13,7 @@ import logging
 import os
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Callable, Optional
 
@@ -27,7 +27,9 @@ log = logging.getLogger("chambers.engine")
 
 STATES = ("idle", "preopen", "running", "flattening", "postclose", "sweeping")
 FILL_TIMEOUT_S = 5.0
+FILL_SETTLE_S = 20.0         # extra wait for an order still working after FILL_TIMEOUT_S, before cancelling it
 FILL_POLL_S = 0.25
+TERMINAL_STATUSES = ("filled", "canceled", "cancelled", "rejected", "expired")
 CYCLE_OFFSET_S = 5           # cycles run at hh:mm:05
 SLIPPAGE_RATE = 0.0001       # 0.01% of notional, applied twice (entry + exit)
 
@@ -384,25 +386,50 @@ class Engine:
         last: dict = {"status": "unknown", "filled_qty": 0.0, "filled_avg_price": None, "filled_at": None}
         for i in range(polls):
             last = self.broker.order_status(order_id)
-            if last.get("status") in ("filled", "canceled", "cancelled", "rejected", "expired"):
+            if last.get("status") in TERMINAL_STATUSES:
                 return last
             if i < polls - 1:
                 self._sleep(FILL_POLL_S)
         return last
 
-    def open_position(self, sig: Signal, quotes: dict, now: datetime) -> Position:
+    def settle_order(self, order_id: str) -> dict:
+        """Wait FILL_TIMEOUT_S, then up to FILL_SETTLE_S more, for a terminal status. If the order is still
+        working, cancel it and wait for the cancel to land, so filled_qty / filled_avg_price are final.
+        The result is non-terminal only if the cancel itself failed."""
+        fill = self.wait_fill(order_id)
+        if fill.get("status") in TERMINAL_STATUSES:
+            return fill
+        fill = self.wait_fill(order_id, FILL_SETTLE_S)
+        if fill.get("status") in TERMINAL_STATUSES:
+            return fill
+        try:
+            self.broker.cancel_order(order_id)
+        except BrokerError:
+            pass  # already in store.errors; the status below stays non-terminal
+        return self.wait_fill(order_id)
+
+    def open_position(self, sig: Signal, quotes: dict, now: datetime) -> Optional[Position]:
+        """Returns None when the settled entry order filled nothing."""
         sym = sig.symbol
         qty = position_qty(sig.price, self.params)
         q = quotes.get(sym) or {}
         oid = self.broker.submit_market(sym, qty, "buy" if sig.side == "long" else "sell")
-        fill = self.wait_fill(oid)
-        if fill.get("status") != "filled":
-            self.store.log_error("cycle.entry", f"{sym} entry order {oid} not filled within {FILL_TIMEOUT_S}s "
-                                 f"(status {fill.get('status')}); recorded at last close", None, now)
-        entry_price = fill.get("filled_avg_price") or sig.price
+        fill = self.settle_order(oid)
+        status = fill.get("status")
         filled_qty = int(fill.get("filled_qty") or 0)
-        if 0 < filled_qty < qty:
+        if status not in TERMINAL_STATUSES:
+            # the cancel failed and the order may still fill: track the full size; reconcile/flatten catch the rest
+            self.store.log_error("cycle.entry", f"{sym} entry order {oid} still {status} after cancel attempt "
+                                 f"({filled_qty}/{qty} filled); recorded x{qty}", None, now)
+        elif filled_qty == 0:
+            self.store.log_error("cycle.entry", f"{sym} entry order {oid} {status} with nothing filled; "
+                                 f"no trade opened", None, now)
+            return None
+        elif filled_qty < qty:
+            self.store.log_error("cycle.entry", f"{sym} entry order {oid} {status} after {filled_qty}/{qty} "
+                                 f"filled; trade opened x{filled_qty}", None, now)
             qty = filled_qty
+        entry_price = fill.get("filled_avg_price") or sig.price
         tid = self.store.open_trade(sym, sig.side, qty, now, entry_price, oid, q.get("bid"), q.get("ask"),
                                     hypothesis(sig, self.params), self.params.to_dict())
         pos = Position(tid, sym, sig.side, qty, entry_price, now, self.data[sym].last_ts,
@@ -416,13 +443,34 @@ class Engine:
         sym = pos.symbol
         q = quotes.get(sym) or {}
         oid = self.broker.submit_market(sym, pos.qty, "sell" if pos.side == "long" else "buy")
-        fill = self.wait_fill(oid)
-        if fill.get("status") != "filled":
-            self.store.log_error("cycle.exit", f"{sym} exit order {oid} not filled within {FILL_TIMEOUT_S}s "
-                                 f"(status {fill.get('status')}); recorded at last close", None, now)
+        fill = self.settle_order(oid)
+        status = fill.get("status")
+        filled_qty = int(fill.get("filled_qty") or 0)
         st = self.data.states.get(sym)
-        exit_price = fill.get("filled_avg_price") or (st.last_close if st and st.last_close else None) or pos.entry_price
-        self._record_close(pos, reason, exit_price, oid, q.get("bid"), q.get("ask"), now)
+        last_close = st.last_close if st and st.last_close else None
+        if status not in TERMINAL_STATUSES:
+            # the cancel failed and the order may still fill: close the whole record rather than risk a second
+            # exit order next cycle; the flatten safety net closes any remainder
+            exit_price = fill.get("filled_avg_price") or last_close or pos.entry_price
+            self.store.log_error("cycle.exit", f"{sym} exit order {oid} still {status} after cancel attempt "
+                                 f"({filled_qty}/{pos.qty} filled); recorded x{pos.qty} at {exit_price}", None, now)
+            self._record_close(pos, reason, exit_price, oid, q.get("bid"), q.get("ask"), now)
+        elif filled_qty >= pos.qty:
+            self._record_close(pos, reason, fill["filled_avg_price"], oid, q.get("bid"), q.get("ask"), now)
+        elif filled_qty == 0:
+            # nothing sold: the position stays open and the exit is retried next cycle
+            self.store.log_error("cycle.exit", f"{sym} exit order {oid} {status} with nothing filled; "
+                                 f"position stays open", None, now)
+        else:
+            # close the filled part as its own trade; the remainder stays open and is retried next cycle
+            rest = pos.qty - filled_qty
+            rest_id = self.store.split_trade(pos.trade_id, filled_qty) if pos.trade_id is not None else None
+            self.store.log_error("cycle.exit", f"{sym} exit order {oid} {status} after {filled_qty}/{pos.qty} "
+                                 f"filled; closed x{filled_qty}, x{rest} stays open as trade {rest_id}", None, now)
+            remainder = replace(pos, trade_id=rest_id, qty=rest)
+            pos.qty = filled_qty
+            self._record_close(pos, reason, fill["filled_avg_price"], oid, q.get("bid"), q.get("ask"), now)
+            self.positions[sym] = remainder
 
     def _record_close(self, pos: Position, reason: str, exit_price: float, oid: Optional[str],
                       exit_bid: Optional[float], exit_ask: Optional[float], now: datetime) -> None:

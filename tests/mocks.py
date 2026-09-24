@@ -42,6 +42,9 @@ class MockBroker:
         self.close_all_calls = 0
         self.calls = {}
         self.fill_status = "filled"
+        self.partial_qty = 0              # with fill_status "partially_filled": shares filled at once
+        self.fill_after_polls = None      # with a non-filled fill_status: the order fills in full on this poll
+        self.cancelled_orders = []
 
     def _hit(self, name):
         self.calls[name] = self.calls.get(name, 0) + 1
@@ -77,21 +80,41 @@ class MockBroker:
         px = self._price(symbol)
         signed = qty if side == "buy" else -qty
         self.submitted.append({"id": oid, "symbol": symbol, "qty": qty, "side": side, "price": px})
-        self.orders[oid] = {"status": self.fill_status, "filled_qty": float(qty) if self.fill_status == "filled" else 0.0,
-                            "filled_avg_price": px if self.fill_status == "filled" else None,
-                            "filled_at": datetime(2026, 9, 22, 10, 0, tzinfo=ET)}
-        if self.fill_status == "filled":
-            new = self.positions_.get(symbol, 0) + signed
-            if new == 0:
-                self.positions_.pop(symbol, None)
-            else:
-                self.positions_[symbol] = new
-                self.avg_entry[symbol] = px
+        filled = qty if self.fill_status == "filled" else (self.partial_qty if self.fill_status == "partially_filled" else 0)
+        self.orders[oid] = {"status": self.fill_status, "filled_qty": float(filled),
+                            "filled_avg_price": px if filled else None,
+                            "filled_at": datetime(2026, 9, 22, 10, 0, tzinfo=ET),
+                            "_symbol": symbol, "_qty": qty, "_sign": 1 if side == "buy" else -1, "_px": px, "_polls": 0}
+        self._move(symbol, signed / qty * filled if filled else 0, px)
         return oid
+
+    def _move(self, symbol, signed, px):
+        if not signed:
+            return
+        new = self.positions_.get(symbol, 0) + int(signed)
+        if new == 0:
+            self.positions_.pop(symbol, None)
+        else:
+            self.positions_[symbol] = new
+            self.avg_entry[symbol] = px
 
     def order_status(self, order_id):
         self._hit("order_status")
-        return dict(self.orders[order_id])
+        o = self.orders[order_id]
+        o["_polls"] += 1
+        if self.fill_after_polls is not None and o["status"] not in ("filled", "canceled") \
+                and o["_polls"] >= self.fill_after_polls:
+            rest = o["_qty"] - int(o["filled_qty"])
+            self._move(o["_symbol"], o["_sign"] * rest, o["_px"])
+            o.update(status="filled", filled_qty=float(o["_qty"]), filled_avg_price=o["_px"])
+        return {k: v for k, v in o.items() if not k.startswith("_")}
+
+    def cancel_order(self, order_id):
+        self._hit("cancel_order")
+        self.cancelled_orders.append(order_id)
+        o = self.orders[order_id]
+        if o["status"] != "filled":
+            o["status"] = "canceled"
 
     def cancel_all(self):
         self._hit("cancel_all")

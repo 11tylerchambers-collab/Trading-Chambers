@@ -112,6 +112,12 @@ class Broker:
         except Exception as e:
             self._fail("order_status", e)
 
+    def cancel_order(self, order_id: str) -> None:
+        try:
+            self._trading.cancel_order_by_id(order_id)
+        except Exception as e:
+            self._fail("cancel_order", e)
+
     def cancel_all(self) -> None:
         try:
             self._trading.cancel_orders()

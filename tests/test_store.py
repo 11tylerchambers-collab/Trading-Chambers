@@ -128,3 +128,15 @@ def test_errors(tmp_path):
 def test_wal_mode_on_file_db(tmp_path):
     st = Store(tmp_path / "t.db")
     assert st._one("PRAGMA journal_mode")[0] == "wal"
+
+
+def test_split_trade(tmp_path):
+    st = Store(tmp_path / "t.db")
+    tid = st.open_trade("INTC", "short", 15, NOW, 126.65, "o1", 126.6, 126.7, {"expect": "return to vwap"}, {"a": 1})
+    st.update_trade_progress(tid, 10, -0.5, 0.1)
+    new = st.split_trade(tid, 9)
+    a, b = st.get_trade(tid), st.get_trade(new)
+    assert (a.qty, b.qty) == (9, 6) and new != tid
+    assert (b.symbol, b.side, b.entry_price, b.entry_order_id, b.entry_ts, b.bars_held, b.mae_pct, b.mfe_pct) == \
+        (a.symbol, a.side, a.entry_price, a.entry_order_id, a.entry_ts, a.bars_held, a.mae_pct, a.mfe_pct)
+    assert b.hypothesis_json == a.hypothesis_json and b.params_json == a.params_json and b.is_open

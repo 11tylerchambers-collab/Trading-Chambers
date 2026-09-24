@@ -124,10 +124,11 @@ def create_app(db_path, password: str, broker=None, clock: Optional[MarketClock]
         rows = store.params_history(8, source="sweep")  # newest first; one extra for the delta of the oldest
         out = []
         for i, r in enumerate(rows[:7]):
-            prev = rows[i + 1]["params"] if i + 1 < len(rows) else None
-            delta = {k: [prev.get(k), r["params"].get(k)] for k in GRID
-                     if prev is not None and prev.get(k) != r["params"].get(k)} if prev else {}
             ss = r.get("sweep_summary") or {}
+            # baseline = the live params the sweep started from (a manual edit may sit between sweep rows)
+            prev = ss.get("current") or (rows[i + 1]["params"] if i + 1 < len(rows) else None)
+            delta = {k: [prev.get(k), r["params"].get(k)] for k in GRID
+                     if prev.get(k) != r["params"].get(k)} if prev else {}
             chosen_stats = next((x for x in ss.get("results", [])
                                  if all(x["params"].get(k) == r["params"].get(k) for k in GRID)), None)
             out.append({"date": r["date"], "params": {k: r["params"].get(k) for k in GRID}, "delta": delta,

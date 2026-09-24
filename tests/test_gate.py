@@ -74,3 +74,12 @@ def test_gate_empty_db(tmp_path):
     res = run_gate(Store(tmp_path / "g.db"))
     assert res["sessions"] == [] and all(not it["pass"] for it in res["items"])
     assert "only 0 session(s)" in format_gate(res)
+
+
+def test_gate_ignores_dates_without_running_cycles(tmp_path):
+    # deploy day: one after-hours idle cycle, no session run → not counted as a session
+    st = Store(tmp_path / "g.db")
+    st.write_cycle(datetime(2026, 9, 11, 16, 27, 46, tzinfo=ET), "idle", 20, 0, 0, 0, 77)
+    fill_day(st, date(2026, 9, 14))
+    res = run_gate(st)
+    assert res["sessions"] == ["2026-09-14"] and st.cycle_dates() == ["2026-09-14"]

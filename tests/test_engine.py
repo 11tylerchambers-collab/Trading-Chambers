@@ -171,17 +171,106 @@ def test_quotes_failure_is_non_fatal(tmp_path):
     assert t.entry_bid is None and t.entry_ask is None
 
 
-def test_unfilled_order_is_recorded_at_last_close(tmp_path):
+def test_unfilled_entry_is_cancelled_and_opens_nothing(tmp_path):
     broker = MockBroker(bars={"AAPL": dip_day_bars()})
     broker.fill_status = "accepted"
     eng, st, broker, ft = make_engine(tmp_path, OPEN + timedelta(minutes=31, seconds=5), broker, universe=["AAPL"])
     eng.startup()
     res = eng.run_cycle()
     assert res.signals_fired == 1
+    assert broker.cancelled_orders == ["o1"]  # waited 5s + 20s, then cancelled
+    assert broker.calls["order_status"] > 100
+    assert st.open_trades() == [] and eng.positions == {}
+    errs = [e["message"] for e in st.recent_errors(5) if e["where_"] == "cycle.entry"]
+    assert len(errs) == 1 and "canceled with nothing filled" in errs[0]
+
+
+def test_partial_entry_is_cancelled_and_opened_at_filled_qty(tmp_path):
+    broker = MockBroker(bars={"AAPL": dip_day_bars()})
+    broker.fill_status, broker.partial_qty = "partially_filled", 7
+    eng, st, broker, ft = make_engine(tmp_path, OPEN + timedelta(minutes=31, seconds=5), broker, universe=["AAPL"])
+    eng.startup()
+    eng.run_cycle()
     t = st.open_trades()[0]
-    assert t.entry_price == 99.0 and t.entry_order_id == "o1"
-    assert st.errors_count(where="cycle.entry") == 1
-    assert broker.calls["order_status"] >= 2  # polled until the 5s timeout
+    assert t.qty == 7 and eng.positions["AAPL"].qty == 7 and broker.positions_ == {"AAPL": 7}
+    assert "after 7/20 filled; trade opened x7" in st.recent_errors(1)[0]["message"]
+
+
+def test_entry_that_fills_during_the_settle_wait_is_not_cancelled(tmp_path):
+    broker = MockBroker(bars={"AAPL": dip_day_bars()})
+    broker.fill_status, broker.partial_qty, broker.fill_after_polls = "partially_filled", 9, 25  # ~6s
+    eng, st, broker, ft = make_engine(tmp_path, OPEN + timedelta(minutes=31, seconds=5), broker, universe=["AAPL"])
+    eng.startup()
+    eng.run_cycle()
+    assert broker.cancelled_orders == [] and st.open_trades()[0].qty == 20
+    assert st.errors_count(where="cycle.entry") == 0
+
+
+def open_aapl_then_exit(tmp_path, exit_setup):
+    """Open 20 AAPL long, then run the vwap_touch exit cycle with the broker set up by `exit_setup`."""
+    broker = MockBroker(bars={"AAPL": dip_day_bars()})
+    eng, st, broker, ft = make_engine(tmp_path, OPEN + timedelta(minutes=31, seconds=5), broker, universe=["AAPL"])
+    eng.startup()
+    eng.run_cycle()
+    broker.bars["AAPL"].append(Bar(OPEN + timedelta(minutes=31), 100.5, 100.5, 100.5, 100.5, 100.0))
+    broker.prices["AAPL"] = 100.5
+    exit_setup(broker)
+    ft.advance(minutes=1)
+    eng.run_cycle()
+    return eng, st, broker, ft
+
+
+def test_exit_that_completes_during_the_settle_wait_records_the_full_fill(tmp_path):
+    # the 2026-09-24 INTC case: partially filled at the 5s mark, filled a moment later
+    def setup(b):
+        b.fill_status, b.partial_qty, b.fill_after_polls = "partially_filled", 9, 25
+    eng, st, broker, ft = open_aapl_then_exit(tmp_path, setup)
+    c = st.closed_trades_for_day(D)
+    assert len(c) == 1 and c[0].qty == 20 and c[0].exit_price == 100.5
+    assert broker.positions_ == {} and eng.positions == {} and broker.cancelled_orders == []
+    assert st.errors_count(where="cycle.exit") == 0  # the old 5s-only wait logged and recorded a 9-share avg
+
+
+def test_partial_exit_closes_filled_part_and_keeps_remainder_open(tmp_path):
+    def setup(b):
+        b.fill_status, b.partial_qty = "partially_filled", 12
+    eng, st, broker, ft = open_aapl_then_exit(tmp_path, setup)
+    assert broker.cancelled_orders == ["o2"]
+    closed, still = st.closed_trades_for_day(D), st.open_trades()
+    assert len(closed) == 1 and closed[0].qty == 12 and closed[0].exit_price == 100.5
+    assert closed[0].gross_pnl == pytest.approx(1.5 * 12)
+    assert len(still) == 1 and still[0].qty == 8 and still[0].entry_price == 99.0 and still[0].entry_order_id == "o1"
+    assert still[0].to_dict()["hypothesis"]["expect"] == "return to vwap"
+    assert eng.positions["AAPL"].qty == 8 and eng.positions["AAPL"].trade_id == still[0].id
+    assert broker.positions_ == {"AAPL": 8}
+    assert "closed x12, x8 stays open" in st.recent_errors(1)[0]["message"]
+    # next cycle the exit is retried for the remainder and fills
+    broker.fill_status, broker.partial_qty = "filled", 0
+    broker.bars["AAPL"].append(Bar(OPEN + timedelta(minutes=32), 100.6, 100.6, 100.6, 100.6, 100.0))
+    broker.prices["AAPL"] = 100.6
+    ft.advance(minutes=1)
+    eng.run_cycle()
+    closed = st.closed_trades_for_day(D)
+    assert sorted(t.qty for t in closed) == [8, 12] and st.open_trades() == [] and broker.positions_ == {}
+
+
+def test_exit_with_nothing_filled_keeps_position_open(tmp_path):
+    def setup(b):
+        b.fill_status = "accepted"
+    eng, st, broker, ft = open_aapl_then_exit(tmp_path, setup)
+    assert st.closed_trades_for_day(D) == [] and st.open_trades()[0].qty == 20
+    assert eng.positions["AAPL"].qty == 20 and broker.positions_ == {"AAPL": 20}
+    assert "nothing filled; position stays open" in st.recent_errors(1)[0]["message"]
+
+
+def test_exit_whose_cancel_fails_closes_the_record_once(tmp_path):
+    def setup(b):
+        b.fill_status, b.partial_qty = "partially_filled", 5
+        b.fail.add("cancel_order")
+    eng, st, broker, ft = open_aapl_then_exit(tmp_path, setup)
+    c = st.closed_trades_for_day(D)
+    assert len(c) == 1 and c[0].qty == 20 and eng.positions == {}  # no second exit order next cycle
+    assert "still partially_filled after cancel attempt" in st.recent_errors(1)[0]["message"]
 
 
 def test_params_reload_every_cycle_and_bad_params_ignored(tmp_path):

@@ -153,3 +153,20 @@ def test_state_with_clock_and_broker(tmp_path):
         assert s["account"] == {"portfolio_value": 100000.0, "buying_power": 200000.0}
         c.get("/api/state", headers=h)
         assert broker.calls["account"] == 1  # cached for 30s
+
+
+def test_sweep_delta_is_against_the_params_the_sweep_started_from(tmp_path):
+    # 2026-09-23/24: a manual restore sits between two sweep rows; the diff must use the sweep's `current`
+    p = tmp_path / "s.db"
+    st = Store(p)
+    st.write_params_history("2026-09-23", Params(entry_dev_pct=0.5, vol_mult=1.0).to_dict(), "sweep",
+                            {"changed": True, "current": Params(entry_dev_pct=0.4, vol_mult=1.25).to_dict()})
+    st.write_params_history("2026-09-23", Params(entry_dev_pct=0.4, vol_mult=1.25).to_dict(), "manual", None)
+    st.write_params_history("2026-09-24", Params(entry_dev_pct=0.5, vol_mult=1.5).to_dict(), "sweep",
+                            {"changed": True, "current": Params(entry_dev_pct=0.4, vol_mult=1.25).to_dict()})
+    st.close()
+    with TestClient(create_app(p, "pw")) as c:
+        h = {"Authorization": "Bearer " + c.post("/api/login", json={"password": "pw"}).json()["token"]}
+        sw = c.get("/api/state", headers=h).json()["sweep_history"]
+    assert sw[0]["delta"] == {"entry_dev_pct": [0.4, 0.5], "vol_mult": [1.25, 1.5]}
+    assert sw[1]["delta"] == {"entry_dev_pct": [0.4, 0.5], "vol_mult": [1.25, 1.0]}

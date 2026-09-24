@@ -127,3 +127,21 @@ Each entry: what was ambiguous or unstated, what I chose, and why. Ordered by bu
 - **Consequences.** A sweep that crashes before writing its row will run again on restart, which is the desired retry. To force a re-sweep for a date on purpose, delete that date's `sweep` row first.
 - **Not changed.** A restart after the close still passes through `flattening` once, which with no positions only calls `close_all_positions()` and `cancel_all()`.
 
+
+## Partial fills (owner request, 2026-09-24)
+
+- **What was wrong.** `wait_fill` gave every order 5 s. On 2026-09-24 at 15:45:05 ET the INTC exit (buy 15) had filled 9 shares at 127.30 when the 5 s ran out. The engine closed the whole 15-share trade at the 9-share average; the last 6 shares filled 0.7 s later at 127.34. The true average was 127.316, so gross was recorded as −$9.70 instead of −$9.94. That $0.24 was the whole gap between the day's gross (+$31.09) and Alpaca's equity change (+$30.85). The error message also said "recorded at last close", which was wrong. The same code path could leave shares untracked: an entry that timed out partway recorded only the partial qty while the order kept filling, and an exit that never finished was recorded as fully closed.
+- **What changed.** `Engine.settle_order` waits 5 s, then up to 20 s more (`FILL_SETTLE_S`) for a terminal status. If the order is still working, it cancels it (`broker.cancel_order`) and waits for the cancel, so `filled_qty` and `filled_avg_price` are final.
+  - Entry: the trade opens at the filled qty. Nothing filled → no trade.
+  - Exit: fully filled → closed at the real average. Partly filled → the filled part is closed as its own trade (`store.split_trade`) and the remainder stays open as a new trade row with the same entry data; the exit is retried next cycle. Nothing filled → the position stays open and is retried.
+  - Cancel failed (status still not terminal): the old behaviour is kept (entry tracked at full size; exit record closed at the best known price), because a retry could double the order. Reconcile and the EOD safety net catch any leftover.
+- **Consequences.** A partial exit produces two closed trades for one entry, so it adds one to the day's closed-trade count. The worst case per order is about 30 s, which could push a cycle past its minute in a pathological market.
+- **Backfill.** Trade 340 (INTC, 2026-09-24) was corrected from Alpaca's fills: exit 127.316 instead of 127.30.
+
+## Sweep history delta (owner request, 2026-09-24)
+
+- The dashboard diffed each sweep row against the previous `sweep` row, which skips `manual` rows. After the 2026-09-23 manual restore, the 2026-09-24 row showed `vol_mult 1.0→1.5` (a two-step move that never happened) and hid `entry_dev_pct 0.4→0.5`. The delta now uses the summary's `current`, the live params the sweep started from, and falls back to the previous row only for rows without it.
+
+## Gate sessions (owner request, 2026-09-24)
+
+- `store.cycle_dates` now counts only dates with at least one `running` cycle. The deploy day (2026-09-22) had a single after-hours `idle` cycle and was being counted as a session with 0% coverage and 0 trades. This does not change when the gate can first pass: five consecutive sessions from 2026-09-23 still end on 2026-09-29.

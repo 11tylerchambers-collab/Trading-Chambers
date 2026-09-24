@@ -261,8 +261,9 @@ class Store:
         return [dict(r) for r in rows]
 
     def cycle_dates(self, limit: int = 5) -> list[str]:
+        """The last `limit` dates with at least one `running` cycle (a `--once` or after-hours start isn't a session)."""
         rows = self._query(
-            "SELECT DISTINCT substr(ts,1,10) AS d FROM cycles ORDER BY d DESC LIMIT ?", (limit,))
+            "SELECT DISTINCT substr(ts,1,10) AS d FROM cycles WHERE state='running' ORDER BY d DESC LIMIT ?", (limit,))
         return sorted(r["d"] for r in rows)
 
     # ---- signals -----------------------------------------------------------
@@ -302,6 +303,20 @@ class Store:
             (symbol, side, qty, iso(entry_ts), entry_price, entry_order_id, entry_bid, entry_ask,
              json.dumps(hypothesis), json.dumps(params)))
         return int(cur.lastrowid)
+
+    def split_trade(self, trade_id: int, keep_qty: int) -> int:
+        """Shrink open trade `trade_id` to `keep_qty` and insert an identical open trade for the rest
+        (a partially filled exit). Returns the new trade's id."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO trades(symbol,side,qty,entry_ts,entry_price,entry_order_id,entry_bid,entry_ask,"
+                "hypothesis_json,bars_held,mae_pct,mfe_pct,params_json) "
+                "SELECT symbol,side,qty-?,entry_ts,entry_price,entry_order_id,entry_bid,entry_ask,"
+                "hypothesis_json,bars_held,mae_pct,mfe_pct,params_json FROM trades WHERE id=?", (keep_qty, trade_id))
+            new_id = self._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            self._conn.execute("UPDATE trades SET qty=? WHERE id=?", (keep_qty, trade_id))
+            self._conn.commit()
+        return int(new_id)
 
     def update_trade_progress(self, trade_id: int, bars_held: int, mae_pct: float, mfe_pct: float) -> None:
         self._exec("UPDATE trades SET bars_held=?, mae_pct=?, mfe_pct=? WHERE id=?",
