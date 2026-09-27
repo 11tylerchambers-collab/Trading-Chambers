@@ -13,6 +13,7 @@ Phase 1A: --once, --replay and --sweep take --sleeve S0|S1|S2|S3 (default S0).
                                         build (and send, unless --dry-run) a Telegram message
     python -m chambers.main --test-alert    send one test alert
     python -m chambers.main --watchdog      alert if any sleeve's heartbeat is > 3 min stale (run by a timer)
+    python -m chambers.main --lab           the night lab (normally started by the engine at nice 10)
 """
 from __future__ import annotations
 
@@ -378,6 +379,7 @@ def cmd_run() -> int:
     sched, runners = build_engine(cfg, store, broker, clock, notifier=notifier)
     sched.jobs = build_jobs(cfg, store, broker, clock, runners, notifier=notifier, backup_dir=DATA_DIR / "backups",
                             evening=lambda d, now: send_evening(store, broker, notifier, d, now),
+                            lab=lambda d, now: start_lab(),
                             morning=lambda now: send_morning(store, broker, clock, notifier, now))
     t = threading.Thread(target=serve, kwargs={"db_path": DB_PATH, "password": creds["dash_password"],
                                                "broker": broker, "clock": clock, "universe": cfg["universe"],
@@ -431,6 +433,36 @@ def cmd_test_alert() -> int:
     return 0 if status == "sent" else 1
 
 
+def start_lab() -> int:
+    from .lab import launch_lab
+    pid = launch_lab(sys.executable, str(ROOT))
+    log.info("night lab started (pid %d, nice 10)", pid)
+    return pid
+
+
+def cmd_lab() -> int:
+    from .lab import format_lab, run_lab
+    if hasattr(os, "nice"):
+        try:
+            cur = os.nice(0)
+            if cur < 10:
+                os.nice(10 - cur)          # lower CPU priority even when started by hand
+        except OSError:
+            pass
+    cfg = load_config()
+    store, broker, clock = optional_runtime()
+    now = now_et()
+    sessions = {}
+    if clock is not None:
+        try:
+            sessions = clock.sessions_between(now.date() - timedelta(days=120), now.date())
+        except Exception as e:
+            log.warning("calendar unavailable (%s); assuming 9:30-16:00", e)
+    out = run_lab(store, now, cfg["universe"], sessions)
+    print(format_lab(out))
+    return 0
+
+
 def cmd_watchdog() -> int:
     from .notify import Notifier
     from .runtime import active_sleeves
@@ -461,6 +493,7 @@ def main(argv=None) -> int:
     ap.add_argument("--date", metavar="YYYY-MM-DD", help="with --brief evening: which day")
     ap.add_argument("--test-alert", action="store_true")
     ap.add_argument("--watchdog", action="store_true")
+    ap.add_argument("--lab", action="store_true")
     args = ap.parse_args(argv)
     if args.params and not args.replay:
         ap.error("--params only applies to --replay")
@@ -472,6 +505,8 @@ def main(argv=None) -> int:
         return cmd_test_alert()
     if args.watchdog:
         return cmd_watchdog()
+    if args.lab:
+        return cmd_lab()
     if args.smoke:
         return cmd_smoke()
     if args.once:

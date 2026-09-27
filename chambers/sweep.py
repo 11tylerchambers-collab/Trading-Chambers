@@ -78,7 +78,7 @@ def load_days(store: Store, dates: list[str], sessions: Optional[dict[date, Sess
     for ds in dates:
         d = date.fromisoformat(ds)
         sess = (sessions or {}).get(d)
-        days.append(build_day(d, store.bars_for_day(d, symbols=symbols), sess))
+        days.append(build_day(d, store.bars_for_day(d, symbols=symbols), sess, bool(store.econ_events_on(d))))
     return days
 
 

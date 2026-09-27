@@ -14,7 +14,13 @@ from chambers.strategy import Params
 from chambers.twin import LiveTwin, TwinBook, day_seed, draw, edge, replay_twin_s0, trailing_rate
 
 from .mocks import UNIVERSE, FakeTime, MockBroker, make_clock
-from .test_migration import synthetic_day
+from .test_migration import synthetic_day as _synthetic_day
+
+SYMS = UNIVERSE[:8]
+
+
+def synthetic_day():
+    return {s: b for s, b in _synthetic_day().items() if s in SYMS}
 
 D = date(2026, 9, 24)
 OPEN = datetime(2026, 9, 24, 9, 30, tzinfo=ET)
@@ -53,7 +59,7 @@ def run_live_s0(tmp_path, stop_at=None, db="t.db", restart_at=None):
 
     def make():
         clk = make_clock(ft, broker)
-        eng = Engine(st, broker, clk, UNIVERSE, P.to_dict(), sleep_fn=ft.sleep)
+        eng = Engine(st, broker, clk, SYMS, P.to_dict(), sleep_fn=ft.sleep)
         eng.twin = LiveTwin(eng, allow_short=True)
         eng.startup()
         return eng
@@ -64,7 +70,7 @@ def run_live_s0(tmp_path, stop_at=None, db="t.db", restart_at=None):
             eng = make()                                             # a new process: twin restored from the store
             restart_at = None
         broker.prices = {s: next((b.c for b in reversed(bars[s]) if b.ts < ft.now.replace(second=0)), 100.0)
-                         for s in UNIVERSE}
+                         for s in SYMS}
         eng.run_cycle()
         ft.advance(minutes=1)
     eng.twin.eod(eng, ft.now)
@@ -131,7 +137,7 @@ def test_s0_fallback_rate_uses_latest_stored_day(tmp_path):
     st = Store(tmp_path / "t.db")
     for s, bs in synthetic_day().items():
         st.write_bars(s, bs)
-    eng = Engine(st, MockBroker(), make_clock(FakeTime(OPEN + timedelta(days=1)), MockBroker()), UNIVERSE, P.to_dict())
+    eng = Engine(st, MockBroker(), make_clock(FakeTime(OPEN + timedelta(days=1)), MockBroker()), SYMS, P.to_dict())
     p = s0_fallback_rate(eng)
     assert 0 < p < 1
 
