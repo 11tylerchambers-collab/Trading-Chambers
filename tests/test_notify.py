@@ -136,7 +136,8 @@ def test_evening_report_text(tmp_path):
     st.write_lab_suggestion(1, 1, "L1_orb", t, {"range_end": "10:30"}, 24, 150.0, -20.0, 31)
     st.write_p100_day(D, {"start_equity": 100, "end_equity": 101.5, "settled_cash_start": 100, "settled_cash_end": 0,
                           "unsettled": [[101.5, "2026-09-23"]], "trades": 2, "skipped": 3, "net_pnl": 1.5,
-                          "shadow_trades": 1, "shadow_net": -0.4}, [])
+                          "shadow_trades": 1, "shadow_net": -0.4,
+                          "detail": {"skipped": {"no_settled_cash": 2, "short_not_translatable": 1}}}, [])
     st.log_error("unhandled.S2", "boom", None, t)
     text = evening_report(st, D, 100123.45)
     assert "S1 Index mean reversion: 1 trades, net +19.80, twin -5.10, edge +24.90" in text
@@ -144,7 +145,7 @@ def test_evening_report_text(tmp_path):
     assert "Recon: pass (diff +0.42" in text
     assert "DAILY LOSS HALT at 11:00" in text and "same_side_cap x3" in text
     assert "L1_orb: graded net +150.00 vs twin -20.00 over 24 sessions" in text
-    assert "$100 profile: equity 101.50" in text and "3 skipped for cash" in text and "learning only" in text
+    assert "$100 profile: equity 101.50" in text and "3 skipped, 2 for unsettled cash" in text and "learning only" in text
     assert "Errors today: 1 (1 UNHANDLED)" in text and "equity 100,123.45" in text
 
 

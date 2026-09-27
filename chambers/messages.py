@@ -149,8 +149,10 @@ def evening_report(store, d: date, account_equity: Optional[float] = None) -> st
     if p:
         led = store.p100_ledger(20)
         first = led[-1]["start_equity"] if led else p["start_equity"]
+        sk = (p.get("detail") or {}).get("skipped") or {}
+        cash = sk.get("no_settled_cash", 0) + sk.get("below_min_order", 0)
         lines.append(f"$100 profile: equity {p['end_equity']:.2f} (day {money(p['net_pnl'])}, {p['trades']} trades, "
-                     f"{p['skipped']} skipped for cash; {len(led)}d {money(p['end_equity'] - first)}); "
+                     f"{p['skipped']} skipped, {cash} for unsettled cash; {len(led)}d {money(p['end_equity'] - first)}); "
                      f"shadow shorts {p['shadow_trades']} ({money(p['shadow_net'])}, learning only)")
     else:
         lines.append("$100 profile: not run")

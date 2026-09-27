@@ -14,6 +14,7 @@ Phase 1A: --once, --replay and --sweep take --sleeve S0|S1|S2|S3 (default S0).
     python -m chambers.main --test-alert    send one test alert
     python -m chambers.main --watchdog      alert if any sleeve's heartbeat is > 3 min stale (run by a timer)
     python -m chambers.main --lab           the night lab (normally started by the engine at nice 10)
+    python -m chambers.main --p100 [--date YYYY-MM-DD]   replay one day as the $100 cash account
 """
 from __future__ import annotations
 
@@ -380,6 +381,7 @@ def cmd_run() -> int:
     sched.jobs = build_jobs(cfg, store, broker, clock, runners, notifier=notifier, backup_dir=DATA_DIR / "backups",
                             evening=lambda d, now: send_evening(store, broker, notifier, d, now),
                             lab=lambda d, now: start_lab(),
+                            p100=lambda d, now: run_p100_day(store, clock, cfg, d, now),
                             morning=lambda now: send_morning(store, broker, clock, notifier, now))
     t = threading.Thread(target=serve, kwargs={"db_path": DB_PATH, "password": creds["dash_password"],
                                                "broker": broker, "clock": clock, "universe": cfg["universe"],
@@ -431,6 +433,28 @@ def cmd_test_alert() -> int:
                                     "If you can read this on your phone, alerts work.")
     print(f"test alert: {status}")
     return 0 if status == "sent" else 1
+
+
+def run_p100_day(store, clock, cfg: dict, d: date, now: datetime, tune: bool = True):
+    from .p100 import run_p100
+    sessions = {}
+    if clock is not None:
+        try:
+            sessions = clock.sessions_between(d - timedelta(days=20), d + timedelta(days=10))
+        except Exception as e:
+            log.warning("calendar unavailable (%s); assuming weekday sessions", e)
+    s1 = ((cfg.get("sleeves") or {}).get("S1") or {}).get("params") or {}
+    return run_p100(store, d, now, cfg["universe"], sessions, cfg["strategy"], s1, tune=tune)
+
+
+def cmd_p100(day: Optional[str]) -> int:
+    from .p100 import format_p100
+    cfg = load_config()
+    store, broker, clock = optional_runtime()
+    d = date.fromisoformat(day) if day else now_et().date()
+    res = run_p100_day(store, clock, cfg, d, now_et())
+    print(format_p100(res))
+    return 0
 
 
 def start_lab() -> int:
@@ -490,10 +514,11 @@ def main(argv=None) -> int:
     ap.add_argument("--gate", action="store_true")
     ap.add_argument("--brief", choices=["morning", "evening"])
     ap.add_argument("--dry-run", action="store_true", help="with --brief: print the text, send nothing")
-    ap.add_argument("--date", metavar="YYYY-MM-DD", help="with --brief evening: which day")
+    ap.add_argument("--date", metavar="YYYY-MM-DD", help="with --brief evening / --p100: which day")
     ap.add_argument("--test-alert", action="store_true")
     ap.add_argument("--watchdog", action="store_true")
     ap.add_argument("--lab", action="store_true")
+    ap.add_argument("--p100", action="store_true")
     args = ap.parse_args(argv)
     if args.params and not args.replay:
         ap.error("--params only applies to --replay")
@@ -507,6 +532,8 @@ def main(argv=None) -> int:
         return cmd_watchdog()
     if args.lab:
         return cmd_lab()
+    if args.p100:
+        return cmd_p100(args.date)
     if args.smoke:
         return cmd_smoke()
     if args.once:
