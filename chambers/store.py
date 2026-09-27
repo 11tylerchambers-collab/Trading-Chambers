@@ -672,6 +672,15 @@ class Store:
             sql += " AND fired=1"
         return int(self._one(sql, (sleeve_id, _date_str(d)))[0])
 
+    def reason_counts(self, d: date | str, reasons: Iterable[str]) -> dict[str, int]:
+        """How many signals on day `d` (any sleeve) carry each of `reasons` (used for the circuit-breaker line)."""
+        rs = list(reasons)
+        if not rs:
+            return {}
+        rows = self._query(f"SELECT reason, COUNT(*) AS n FROM signals WHERE substr(ts,1,10)=? AND reason IN "
+                           f"({','.join('?' * len(rs))}) GROUP BY reason", (_date_str(d), *rs))
+        return {r["reason"]: int(r["n"]) for r in rows}
+
     def signal_dates(self, sleeve_id: str, before: date | str, limit: int = 20) -> list[str]:
         rows = self._query(
             "SELECT DISTINCT substr(ts,1,10) AS d FROM signals WHERE sleeve_id=? AND substr(ts,1,10)<? "

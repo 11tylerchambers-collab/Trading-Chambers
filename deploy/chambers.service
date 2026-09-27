@@ -1,5 +1,5 @@
 [Unit]
-Description=Trading Chambers Phase 0 engine + dashboard
+Description=Trading Chambers engine (all sleeves) + dashboard
 After=network-online.target
 Wants=network-online.target
 

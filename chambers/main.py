@@ -9,6 +9,10 @@
     python -m chambers.main --gate      Phase 0 acceptance checks 1-6
 
 Phase 1A: --once, --replay and --sweep take --sleeve S0|S1|S2|S3 (default S0).
+    python -m chambers.main --brief morning|evening [--dry-run] [--date YYYY-MM-DD]
+                                        build (and send, unless --dry-run) a Telegram message
+    python -m chambers.main --test-alert    send one test alert
+    python -m chambers.main --watchdog      alert if any sleeve's heartbeat is > 3 min stale (run by a timer)
 """
 from __future__ import annotations
 
@@ -365,12 +369,16 @@ def cmd_run() -> int:
     """The service: engine loop in the main thread, dashboard in a daemon thread."""
     import threading
     from .dashboard.app import serve
+    from .notify import Notifier
     from .runtime import build_engine, build_jobs
     cfg = load_config()
     creds = require_paper_env()
     store, broker, clock = build_runtime(creds, cfg)
-    sched, runners = build_engine(cfg, store, broker, clock)
-    sched.jobs = build_jobs(cfg, store, broker, clock, runners, backup_dir=DATA_DIR / "backups")
+    notifier = Notifier.from_env(store)
+    sched, runners = build_engine(cfg, store, broker, clock, notifier=notifier)
+    sched.jobs = build_jobs(cfg, store, broker, clock, runners, notifier=notifier, backup_dir=DATA_DIR / "backups",
+                            evening=lambda d, now: send_evening(store, broker, notifier, d, now),
+                            morning=lambda now: send_morning(store, broker, clock, notifier, now))
     t = threading.Thread(target=serve, kwargs={"db_path": DB_PATH, "password": creds["dash_password"],
                                                "broker": broker, "clock": clock, "universe": cfg["universe"],
                                                "host": "0.0.0.0", "port": 8080},
@@ -378,6 +386,64 @@ def cmd_run() -> int:
     t.start()
     sched.run_forever()
     return 0
+
+
+def account_equity(broker) -> Optional[float]:
+    try:
+        return float(broker.account()["equity"]) if broker is not None else None
+    except Exception:
+        return None
+
+
+def send_evening(store, broker, notifier, d: date, now: datetime) -> str:
+    from .messages import evening_report
+    return notifier.send("evening", "evening", evening_report(store, d, account_equity(broker)), now)
+
+
+def send_morning(store, broker, clock, notifier, now: datetime) -> str:
+    from .messages import morning_brief
+    return notifier.send("morning", "morning", morning_brief(store, broker, clock, now), now)
+
+
+def cmd_brief(which: str, dry_run: bool, day: Optional[str]) -> int:
+    from .notify import Notifier
+    store, broker, clock = optional_runtime()
+    notifier = Notifier.from_env(store, dry_run=dry_run)
+    now = now_et()
+    if which == "morning":
+        status = send_morning(store, broker, clock, notifier, now)
+    else:
+        status = send_evening(store, broker, notifier, date.fromisoformat(day) if day else now.date(), now)
+    if not dry_run:
+        print(f"evening/morning message: {status}")
+    return 0
+
+
+def cmd_test_alert() -> int:
+    from .notify import Notifier
+    from .store import Store
+    load_env()
+    store = Store(DB_PATH)
+    n = Notifier.from_env(store)
+    status = n.send("test", "test", f"Trading Chambers test alert {now_et().strftime('%Y-%m-%d %H:%M:%S')} ET. "
+                                    "If you can read this on your phone, alerts work.")
+    print(f"test alert: {status}")
+    return 0 if status == "sent" else 1
+
+
+def cmd_watchdog() -> int:
+    from .notify import Notifier
+    from .runtime import active_sleeves
+    from .watchdog import run_watchdog
+    cfg = load_config()
+    store, broker, clock = optional_runtime()
+    if clock is None:
+        print("watchdog needs Alpaca credentials for the market calendar", file=sys.stderr)
+        return 2
+    stale = run_watchdog(store, clock, Notifier.from_env(store), active_sleeves(cfg))
+    for s in stale:
+        print(f"STALE {s['sleeve_id']}: due {s['due'].isoformat()} last {s['last_cycle_ts']}")
+    return 1 if stale else 0
 
 
 def main(argv=None) -> int:
@@ -390,10 +456,22 @@ def main(argv=None) -> int:
     ap.add_argument("--recompute-costs", action="store_true")
     ap.add_argument("--sweep", action="store_true")
     ap.add_argument("--gate", action="store_true")
+    ap.add_argument("--brief", choices=["morning", "evening"])
+    ap.add_argument("--dry-run", action="store_true", help="with --brief: print the text, send nothing")
+    ap.add_argument("--date", metavar="YYYY-MM-DD", help="with --brief evening: which day")
+    ap.add_argument("--test-alert", action="store_true")
+    ap.add_argument("--watchdog", action="store_true")
     args = ap.parse_args(argv)
     if args.params and not args.replay:
         ap.error("--params only applies to --replay")
-    setup_logging(to_file=not (args.smoke or args.replay or args.gate or args.recompute_costs))
+    setup_logging(to_file=not (args.smoke or args.replay or args.gate or args.recompute_costs or args.brief
+                                or args.test_alert or args.watchdog))
+    if args.brief:
+        return cmd_brief(args.brief, args.dry_run, args.date)
+    if args.test_alert:
+        return cmd_test_alert()
+    if args.watchdog:
+        return cmd_watchdog()
     if args.smoke:
         return cmd_smoke()
     if args.once:

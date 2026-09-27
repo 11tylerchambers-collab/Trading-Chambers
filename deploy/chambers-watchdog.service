@@ -1,0 +1,17 @@
+[Unit]
+Description=Trading Chambers heartbeat watchdog (one check; run every minute by chambers-watchdog.timer)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=chambers
+Group=chambers
+WorkingDirectory=/opt/chambers
+ExecStart=/opt/chambers/.venv/bin/python -m chambers.main --watchdog
+# exit 1 = something is stale (the alert has been sent); not a unit failure worth restarting over
+SuccessExitStatus=1
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/chambers/data
