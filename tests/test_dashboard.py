@@ -170,3 +170,91 @@ def test_sweep_delta_is_against_the_params_the_sweep_started_from(tmp_path):
         sw = c.get("/api/state", headers=h).json()["sweep_history"]
     assert sw[0]["delta"] == {"entry_dev_pct": [0.4, 0.5], "vol_mult": [1.25, 1.5]}
     assert sw[1]["delta"] == {"entry_dev_pct": [0.4, 0.5], "vol_mult": [1.25, 1.0]}
+
+
+# ---------------------------------------------------------------- Phase 1A additions
+
+def seed_1a(path):
+    from chambers.runtime import register_sleeves
+    seed(path)
+    st = Store(path)
+    register_sleeves(st, {"universe": ["AAPL", "MSFT"], "sleeves": {}})
+    st.write_heartbeat("S1", state="running", last_cycle_ts=NOW - timedelta(minutes=5), cycles_today=4)
+    st.write_heartbeat("ALL", state="running", last_cycle_ts=NOW, pid=4242)
+    st.write_bars("SPY", [Bar(NOW.replace(minute=15, second=0), 500, 500, 500, 500, 1)])
+    st.open_trade("SPY", "long", 10, NOW - timedelta(minutes=15), 498.0, "s1", None, None,
+                  {"stop_price": 495.0, "z": -2.3, "entry_bar_ts": "2026-09-22T10:00:00-04:00"},
+                  {"entry_z": 2.0}, sleeve_id="S1")
+    t = st.open_trade("QQQ", "short", 5, NOW - timedelta(minutes=60), 400.0, "s1b", None, None, {"z": 2.5}, {},
+                      sleeve_id="S1")
+    st.close_trade(t, NOW - timedelta(minutes=30), 398.0, "x", None, None, "z_revert", 2, 0, 0.5, 10.0, 0.1, 9.9)
+    w = st.open_twin_trade("S1", "2026-09-22", 9, "SPY", "short", 3, NOW - timedelta(minutes=60), 500.0, {}, {}, False, None)
+    st.close_twin_trade(w, NOW - timedelta(minutes=30), 501.0, "z_revert", 2, -0.2, 0, -3.0, 0.1, -3.1)
+    st.write_recon(NOW, "equity_session", "pass", equity=100000, diff=0.5, threshold=10)
+    st.write_alert(NOW, "alert", "recon", "RECON MISMATCH test", "disabled")
+    st.start_lab_run(NOW, ["2026-09-21"])
+    st.write_lab_result(1, "L1_orb", 24, [], [], {"range_minutes": 60}, 5, 50.0, 20, -4.0, 1, True, "ok", None)
+    st.write_lab_suggestion(1, 1, "L1_orb", NOW, {"range_minutes": 60}, 24, 50.0, -4.0, 20)
+    st.write_p100_day(D, {"start_equity": 100, "end_equity": 100.4, "settled_cash_start": 100, "settled_cash_end": 0,
+                          "unsettled": [[100.4, "2026-09-23"]], "trades": 1, "skipped": 2, "net_pnl": 0.4,
+                          "shadow_trades": 1, "shadow_net": -0.2}, [])
+    st.close()
+
+
+@pytest.fixture
+def client_1a(tmp_path):
+    p = tmp_path / "seed.db"
+    seed_1a(p)
+    with TestClient(create_app(p, "pw", now_fn=lambda: NOW)) as c:
+        c.h = {"Authorization": "Bearer " + c.post("/api/login", json={"password": "pw"}).json()["token"]}
+        c.path = p
+        yield c
+
+
+def test_views_all_sleeve_and_p100(client_1a):
+    c = client_1a
+    s = c.get("/api/state?sleeve=S1", headers=c.h).json()
+    assert s["sleeve"] == "S1" and s["heartbeat"]["cycles_today"] == 4
+    assert [p["symbol"] for p in s["open_positions"]] == ["SPY"]
+    pos = s["open_positions"][0]
+    assert pos["stop_price"] == 495.0 and pos["current_price"] == 500 and pos["unrealized_pl"] == pytest.approx(20.0)
+    assert [t["symbol"] for t in s["recent_trades"]] == ["QQQ"]
+    assert s["edge"]["sleeve_net"] == 9.9 and s["edge"]["twin_net"] == -3.1 and s["edge"]["edge"] == 13.0
+    assert s["params"]["sleeve_id"] == "S1" and s["params"]["params"]["entry_z"] == 2.0
+    assert {f["key"] for f in s["params"]["fields"]} >= {"entry_z", "stop_atr", "max_hold_bars", "skip_news_days"}
+    ov = {x["id"]: x for x in s["sleeves"]}
+    assert set(ov) == {"S0", "S1", "S2", "S3"} and ov["S1"]["edge_today"] == 13.0 and ov["S1"]["open_positions"] == 1
+    assert s["portfolio"]["long"] == 2 and s["portfolio"]["short"] == 1 and s["portfolio"]["last_recon"]["status"] == "pass"
+    assert s["lab"]["suggestions"][0]["candidate"] == "L1_orb" and s["alerts"][0]["message"] == "RECON MISMATCH test"
+    a = c.get("/api/state?sleeve=All", headers=c.h).json()
+    assert {p["sleeve_id"] for p in a["open_positions"]} == {"S0", "S1"} and a["params"] is None
+    assert a["heartbeat"]["pid"] == 4242
+    p = c.get("/api/state?sleeve=P100", headers=c.h).json()
+    assert p["p100"]["ledger"][0]["end_equity"] == 100.4 and set(p["p100"]["params"]) == {"S0", "S1"}
+    assert c.get("/api/state?sleeve=S9", headers=c.h).status_code == 400
+    # no `sleeve` = S0, the Phase 0 contract
+    assert c.get("/api/state", headers=c.h).json()["sleeve"] == "S0"
+
+
+def test_edit_bar_sleeve_params(client_1a):
+    c = client_1a
+    r = c.post("/api/params", json={"sleeve_id": "S3", "params": {"fast": 5, "slow": 20}}, headers=c.h)
+    assert r.status_code == 200 and r.json()["params"]["fast"] == 5
+    st = Store(c.path)
+    assert st.read_params("S3")["source"] == "manual" and st.params_history(1, "manual", "S3")[0]["params"]["slow"] == 20
+    assert st.read_params("S0")["source"] == "config"                     # other sleeves untouched
+    assert c.post("/api/params", json={"sleeve_id": "S3", "params": {"fast": 30, "slow": 20}}, headers=c.h).status_code == 400
+    assert c.post("/api/params", json={"sleeve_id": "S1", "params": {"entry_dev_pct": 1}}, headers=c.h).status_code == 400
+    assert c.post("/api/params", json={"sleeve_id": "P100", "params": {}}, headers=c.h).status_code == 400
+
+
+def test_lab_approve_and_reject(client_1a):
+    c = client_1a
+    assert c.post("/api/lab/decide", json={"id": 1, "status": "approved"}).status_code == 401
+    assert c.post("/api/lab/decide", json={"id": 1, "status": "maybe"}, headers=c.h).status_code == 400
+    assert c.post("/api/lab/decide", json={"id": 1, "status": "approved"}, headers=c.h).json()["status"] == "approved"
+    assert c.post("/api/lab/decide", json={"id": 1, "status": "rejected"}, headers=c.h).status_code == 409
+    sug = Store(c.path).lab_suggestions()[0]
+    assert sug["status"] == "approved" and sug["decided_at"]
+    # approving records the decision only: no params, trades or sleeves change
+    assert Store(c.path).read_params("S1") is None

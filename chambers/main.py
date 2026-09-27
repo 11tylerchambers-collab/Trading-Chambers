@@ -385,6 +385,8 @@ def cmd_run() -> int:
                             morning=lambda now: send_morning(store, broker, clock, notifier, now))
     t = threading.Thread(target=serve, kwargs={"db_path": DB_PATH, "password": creds["dash_password"],
                                                "broker": broker, "clock": clock, "universe": cfg["universe"],
+                                               "max_same_side": int((cfg.get("risk") or {}).get("max_same_side", 15)),
+                                               "daily_loss_pct": float((cfg.get("risk") or {}).get("daily_loss_pct", 0.02)),
                                                "host": "0.0.0.0", "port": 8080},
                          daemon=True, name="dashboard")
     t.start()
