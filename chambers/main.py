@@ -225,11 +225,24 @@ def cmd_replay(day: str, params_text: Optional[str] = None, sleeve: str = "S0") 
     d = date.fromisoformat(day)
     sess = sessions_for(clock, [day]).get(d)
     if sleeve == "S0":
-        res = replay_day(store, d, apply_param_overrides(current_params(store, cfg), params_text), sess,
-                         symbols=cfg["universe"])
+        params = apply_param_overrides(current_params(store, cfg), params_text)
+        res = replay_day(store, d, params, sess, symbols=cfg["universe"])
         print(format_replay(res))
+        print(twin_line(store, d, params, sess, cfg["universe"], res.net_pnl))
         return 0
     return cmd_replay_sleeve(store, clock, cfg, sleeve, d, params_text)
+
+
+def twin_line(store, d: date, params, sess, universe: list[str], sleeve_net: float) -> str:
+    """S0's random twin for the day, from the logged seed and p (reproduces the live twin)."""
+    from .replay import build_day
+    from .twin import day_seed, replay_twin_s0, trailing_rate
+    row = store.get_twin_seed("S0", d.isoformat())
+    seed, p, src = (row["seed"], row["p"], "logged") if row else \
+        (day_seed("S0", d.isoformat()), trailing_rate(store, "S0", d.isoformat())[0], "computed")
+    tw = replay_twin_s0(build_day(d, store.bars_for_day(d, symbols=universe), sess), params, seed, p)
+    return (f"twin ({src} seed={seed} p={p:.5f}): trades={len(tw.trades)} net={tw.net_pnl:.2f}  "
+            f"edge vs twin={sleeve_net - tw.net_pnl:.2f}")
 
 
 def sleeve_params(store, cfg: dict, sleeve: str, text: Optional[str] = None) -> dict:

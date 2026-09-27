@@ -627,6 +627,11 @@ class Store:
             "ORDER BY d DESC LIMIT ?", (sleeve_id, limit))
         return sorted(r["d"] for r in rows)
 
+    def cycle_dates_between(self, sleeve_id: str, start: str, end: str) -> list[str]:
+        rows = self._query("SELECT DISTINCT substr(ts,1,10) AS d FROM cycles WHERE sleeve_id=? AND state='running' "
+                           "AND substr(ts,1,10)>=? AND substr(ts,1,10)<=? ORDER BY d", (sleeve_id, start, end))
+        return [r["d"] for r in rows]
+
     def max_cycle_duration_since(self, since: datetime) -> int:
         """Longest cycle (ms) of any sleeve since `since` — the night lab's pause signal."""
         r = self._one("SELECT MAX(duration_ms) FROM cycles WHERE ts>=?", (iso(since),))

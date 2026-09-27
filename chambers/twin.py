@@ -262,3 +262,44 @@ class LiveTwin:
     def on_cycle_bars(self, sleeve, now: datetime, ctxs: dict[str, TwinCtx], entries_ok: bool) -> None:
         self.ensure_day(now)
         self.book.step(now, ctxs, entries_ok)
+
+
+def replay_twin_s0(day, params, seed: int, p: float) -> TwinBook:
+    """S0's twin for one stored day (a `replay.DayData`): the same TwinBook, fed minute by minute the way the
+    live cycle feeds it, so `seed` + `p` + the day's bars reproduce the live twin's trades."""
+    from datetime import timedelta
+    book = TwinBook("S0", allow_short=True)
+    book.set_day(day.date.isoformat(), seed, p)
+    session = day.session
+    last: dict = {}
+    for m in day.minutes:
+        now = m + timedelta(minutes=1, seconds=5)
+        if now >= session.flatten_at:
+            break
+        for snap in day.at[m]:
+            last[snap.symbol] = snap
+        ctxs = {}
+        for sym, snap in last.items():
+            ctxs[sym] = TwinCtx(
+                snap.ts, snap.last_close,
+                eligible=snap.bar_count >= params.min_bars_before_entry and snap.dev_pct is not None
+                and snap.vol_ratio is not None,
+                exit=lambda pos, c=snap.last_close, v=snap.vwap: check_exit(pos, c, v, params),
+                size=lambda side, price: max(1, int(params.notional_per_trade // price)) if price > 0 else 0)
+        book.step(now, ctxs, session.entries_allowed(now))
+    book.flatten(session.flatten_at, {s: sn.last_close for s, sn in day.last_snapshot.items()})
+    return book
+
+
+def edge(store, sleeve_id: str, day: str, trailing: int = TRAILING_SESSIONS) -> dict:
+    """The scoreboard metric (§4): sleeve net P&L − twin net P&L, for `day` and its trailing sessions."""
+    dates = [d for d in store.cycle_dates(trailing + 5, sleeve_id) if d <= day]
+    if day not in dates:
+        dates.append(day)
+    dates = sorted(dates)[-trailing:]
+    s_day, t_day = store.sleeve_net_between(sleeve_id, day, day), store.twin_net_between(sleeve_id, day, day)
+    s_tr = store.sleeve_net_between(sleeve_id, dates[0], day)
+    t_tr = store.twin_net_between(sleeve_id, dates[0], day)
+    return {"sleeve_id": sleeve_id, "day": day, "sleeve_net": round(s_day, 2), "twin_net": round(t_day, 2),
+            "edge": round(s_day - t_day, 2), "sessions": len(dates), "sleeve_net_trailing": round(s_tr, 2),
+            "twin_net_trailing": round(t_tr, 2), "edge_trailing": round(s_tr - t_tr, 2)}
