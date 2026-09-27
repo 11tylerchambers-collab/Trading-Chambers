@@ -79,3 +79,28 @@ def test_once_each_sleeve_after_hours(tmp_path):
     s0 = st.signals_for_day(D, "S0")
     assert len(s0) == 20 and all(s["reason"] == "entries_closed" for s in s0[-20:])   # S0 unchanged in --once
     assert {s["reason"] for s in st.signals_for_day(D, "S1")} <= {"entries_closed", "insufficient_bars"}
+
+
+def test_gate_1a_over_a_simulated_day(tmp_path):
+    from chambers.gate1a import format_gate_1a, run_gate_1a
+    empty = run_gate_1a(Store(tmp_path / "e.db"))
+    assert not any(i["pass"] for i in empty["items"])
+    sched, runners, st, broker, ft = world(tmp_path, datetime(2026, 9, 21, 23, 55, tzinfo=ET))
+    sched.startup()
+    while ft.now < datetime(2026, 9, 22, 23, 55, tzinfo=ET):
+        sched.tick()
+    res = run_gate_1a(st)
+    items = {i["id"]: i for i in res["items"]}
+    assert res["sessions"] == ["2026-09-22"]
+    assert items[1]["pass"], items[1]["detail"]          # S0 385/385, S1 25/25, S3 2/2, S2 24/24
+    assert items[3]["pass"] and items[7]["pass"]
+    assert not items[2]["pass"] and not items[6]["pass"]  # flat synthetic day; no Telegram
+    assert "OVERALL: FAIL" in format_gate_1a(res)
+
+
+def test_broker_check_text():
+    from chambers.main import broker_check_text
+    t = broker_check_text({"multiplier": "4", "pattern_day_trader": False, "daytrade_count": 2,
+                           "intraday_adjustments": "0", "status": "ACTIVE"})
+    assert "margin account, 4x" in t and "pattern day trader flag: False" in t and "day-trade count" in t
+    assert "intraday_adjustments: 0" in t

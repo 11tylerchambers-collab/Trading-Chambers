@@ -1,4 +1,4 @@
-# INSTALL — Phase 0 host setup
+# INSTALL — host setup (Phase 0, plus Phase 1A in section E)
 
 Two supported hosts. **Use the Linux VPS.** A desktop that sleeps, updates, or
 loses Wi-Fi is the single biggest cause of "it was green all day but nothing
@@ -237,3 +237,132 @@ password") so a reboot comes back trading. Logs are in
 
 Open Task Manager, end the `python.exe` process. The bat loop restarts it
 within 10 seconds; the log shows `reconcile:` lines and the next cycle.
+
+---
+
+## E. Phase 1A (sleeves, risk, night lab, alerts)
+
+Phase 1A is on branch `phase1a`. **Do not deploy it until the Phase 0 gate has
+passed** (`python -m chambers.main --gate`: all PASS over 5 sessions). Deploy
+after the close, never mid-session.
+
+### E.1 Deploy
+
+```bash
+sudo systemctl stop chambers
+cd /opt/chambers
+# a manual copy first, while nothing is writing (the code also makes its own, see below)
+sudo -u chambers sqlite3 data/chambers.db ".backup data/chambers-pre-1a-manual.db"
+sudo -u chambers git fetch origin && sudo -u chambers git checkout phase1a && sudo -u chambers git pull
+sudo -u chambers .venv/bin/pip install -r requirements.txt
+```
+
+The first command that opens the database migrates it in place. Before touching
+it, it copies the Phase 0 file with the SQLite backup API to
+`data/backups/pre-phase1a-YYYYmmdd-HHMMSS.db` and prints that path. Every Phase 0
+row becomes sleeve `S0`, profile `LIVE`. Check that a recorded Phase 0 day still
+replays identically. Run this **before** and **after** the checkout and compare:
+
+```bash
+sudo -u chambers .venv/bin/python -m chambers.main --replay 2026-09-24 > /tmp/before.txt        # on main
+sudo -u chambers .venv/bin/python -m chambers.main --replay 2026-09-24 --sleeve S0 > /tmp/after.txt  # on phase1a
+diff <(head -n -1 /tmp/before.txt) <(head -n -1 /tmp/after.txt) && echo IDENTICAL
+```
+
+(The last line of the 1A output adds S0's random twin for the day, hence `head -n -1`.
+The replay uses the current params: if a sweep changed them in between, pass the
+same `--params` to both.)
+
+Then, still with the service stopped:
+
+```bash
+sudo -u chambers .venv/bin/python -m chambers.main --broker-check    # account type, PDT flag, day-trade count
+sudo -u chambers .venv/bin/python -m chambers.main --once --sleeve S1 # one cycle each (after hours: entries_closed)
+sudo -u chambers .venv/bin/python -m chambers.main --once --sleeve S2
+sudo -u chambers .venv/bin/python -m chambers.main --once --sleeve S3
+sudo cp deploy/chambers.service /etc/systemd/system/ && sudo systemctl daemon-reload
+sudo systemctl start chambers
+```
+
+The first start fetches history once: 20 sessions of SPY/QQQ 1-minute bars (S1),
+35 days of hourly BTC/USD (S2), 120 sessions of 30-minute GLD/USO bars (S3).
+This takes a minute or two. The nightly chain later adds 60 sessions of SPY/QQQ and
+260 daily bars for the night lab.
+
+`config.yaml` has the new sections: `sleeves` (capital, active, params per
+sleeve), `risk`, `crypto.fee_rate`, `data_feed` (`iex` → `sip` if you buy
+Alpaca's paid data; no code change), `p100.extra_symbols`. Params change from the
+dashboard without a restart; `config.yaml` values only seed a sleeve's first
+params.
+
+### E.2 Telegram (phone messages and alerts)
+
+1. In Telegram, open a chat with **@BotFather**, send `/newbot`, pick a name and
+   a username ending in `bot`. BotFather replies with the token
+   (`123456789:AA...`). That is `TELEGRAM_BOT_TOKEN`.
+2. Open a chat with your new bot and send it any message (a bot cannot message
+   you first).
+3. Get your chat id:
+   `curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates"`. In the reply,
+   `"chat":{"id":123456789,...}` is `TELEGRAM_CHAT_ID`.
+4. Add both to `/opt/chambers/.env`, then `sudo systemctl restart chambers`
+   (after hours).
+5. `sudo -u chambers .venv/bin/python -m chambers.main --test-alert` should
+   print `test alert: sent`, and the message should arrive (gate item 6).
+
+Without the two values, messaging is disabled with one warning in the log.
+Everything is still recorded in the `alerts` table and on the dashboard.
+Preview the texts any time without sending:
+`--brief morning --dry-run`, `--brief evening --dry-run [--date YYYY-MM-DD]`.
+
+### E.3 Heartbeat watchdog (stale-heartbeat alerts)
+
+The stale-heartbeat alert comes from a separate one-shot process run every
+minute, so it still fires if the engine is hung or down:
+
+```bash
+sudo cp deploy/chambers-watchdog.service deploy/chambers-watchdog.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now chambers-watchdog.timer
+systemctl list-timers chambers-watchdog.timer
+```
+
+Windows: add a Task Scheduler task that runs
+`C:\chambers\.venv\Scripts\python.exe -m chambers.main --watchdog` in
+`C:\chambers` every minute.
+
+### E.4 Backups
+
+The engine writes `data/backups/chambers-YYYY-MM-DD.db` every night (SQLite
+backup API, safe while it runs) and keeps the newest 14. Those files live on the
+same disk, so also enable **DigitalOcean droplet backups** (a user action, not
+code): DigitalOcean control panel → Droplets → your droplet → **Backups** →
+**Enable backups** (weekly or daily; a percentage of the droplet price). To copy a
+nightly file off the box from your laptop:
+`scp root@<tailscale-ip>:/opt/chambers/data/backups/chambers-2026-10-01.db .`
+
+To restore: stop the service, copy a backup over `data/chambers.db` (remove
+`data/chambers.db-wal` and `-shm` first), start the service.
+
+### E.5 What runs when (ET)
+
+| Time | What |
+|---|---|
+| 08:45 session days | Morning brief (Telegram) |
+| open − 15 min | Preopen for S0, S1, S3: params, history, one reconcile across all sleeves |
+| every minute :05 | S0 cycle |
+| :00:05, :15:05, :30:05, :45:05 (from 9:45) | S1 cycle |
+| every hour at :00:10 UTC, 24/7 | S2 cycle |
+| 13:30:05 and close − 5 min | S3 decisions (S3 holds overnight) |
+| close − 5 min | S0 and S1 flatten; S2, S3 keep their positions |
+| close + 30 min | Sweeps S0, S1, S3; then the nightly chain: history → P100 → recon → backup → evening report → night lab (nice 10) |
+| 00:30 UTC | S2 sweep and the crypto recon |
+| every minute | Watchdog (separate timer) |
+
+### E.6 Phase 1A gate
+
+`sudo -u chambers .venv/bin/python -m chambers.main --gate-1a` checks §15 items
+1–6 and the `unhandled` part of 7 over the last 10 sessions. The mid-session
+restart with an overnight S3 position is checked by hand: during a session
+while S3 holds GLD or USO, `sudo systemctl kill chambers`. Within a minute the log
+should show `reconcile: S3 adopted …` and the dashboard should show the position
+under S3, with no orphan in `errors`.

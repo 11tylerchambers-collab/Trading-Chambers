@@ -15,6 +15,8 @@ Phase 1A: --once, --replay and --sweep take --sleeve S0|S1|S2|S3 (default S0).
     python -m chambers.main --watchdog      alert if any sleeve's heartbeat is > 3 min stale (run by a timer)
     python -m chambers.main --lab           the night lab (normally started by the engine at nice 10)
     python -m chambers.main --p100 [--date YYYY-MM-DD]   replay one day as the $100 cash account
+    python -m chambers.main --broker-check  account type, PDT flag, day-trade count (report only)
+    python -m chambers.main --gate-1a       Phase 1A gate checks over the last 10 sessions
 """
 from __future__ import annotations
 
@@ -459,6 +461,49 @@ def cmd_p100(day: Optional[str]) -> int:
     return 0
 
 
+BROKER_CHECK_KEYS = ("account_number", "status", "crypto_status", "currency", "multiplier", "pattern_day_trader",
+                     "daytrade_count", "daytrading_buying_power", "regt_buying_power", "buying_power", "cash",
+                     "equity", "last_equity", "shorting_enabled", "trading_blocked", "account_blocked",
+                     "trade_suspended_by_user")
+
+
+def broker_check_text(details: dict) -> str:
+    """Report how Alpaca currently classifies the account (§5.5). No behaviour depends on it in 1A."""
+    mult = str(details.get("multiplier") or "")
+    kind = {"1": "cash account (multiplier 1)", "2": "margin account, 2x (Reg T)",
+            "4": "margin account, 4x (day-trading buying power)"}.get(mult, f"multiplier {mult or 'unknown'}")
+    lines = ["== broker check (report only) ==", f"account type: {kind}",
+             f"pattern day trader flag: {details.get('pattern_day_trader')}",
+             f"day-trade count (rolling 5 business days): {details.get('daytrade_count')}"]
+    for k in BROKER_CHECK_KEYS:
+        if k in details:
+            lines.append(f"  {k}: {details[k]}")
+    extra = sorted(k for k in details if k not in BROKER_CHECK_KEYS and any(w in k.lower() for w in
+                                                                              ("day", "pdt", "intraday", "margin")))
+    if extra:
+        lines.append("other day-trading / margin fields Alpaca returns (new rule fields would show here):")
+        lines += [f"  {k}: {details[k]}" for k in extra]
+    return "\n".join(lines)
+
+
+def cmd_broker_check() -> int:
+    creds = require_paper_env()
+    store, broker, clock = build_runtime(creds)
+    print(broker_check_text(broker.account_details()))
+    return 0
+
+
+def cmd_gate_1a() -> int:
+    from .gate1a import format_gate_1a, run_gate_1a
+    from .runtime import active_sleeves
+    cfg = load_config()
+    store, broker, clock = optional_runtime()
+    sessions = sessions_for(clock, store.cycle_dates(10))
+    res = run_gate_1a(store, sessions, tuple(active_sleeves(cfg)))
+    print(format_gate_1a(res))
+    return 0 if all(i["pass"] for i in res["items"]) and len(res["sessions"]) >= 10 else 1
+
+
 def start_lab() -> int:
     from .lab import launch_lab
     pid = launch_lab(sys.executable, str(ROOT))
@@ -521,11 +566,13 @@ def main(argv=None) -> int:
     ap.add_argument("--watchdog", action="store_true")
     ap.add_argument("--lab", action="store_true")
     ap.add_argument("--p100", action="store_true")
+    ap.add_argument("--broker-check", action="store_true")
+    ap.add_argument("--gate-1a", action="store_true")
     args = ap.parse_args(argv)
     if args.params and not args.replay:
         ap.error("--params only applies to --replay")
     setup_logging(to_file=not (args.smoke or args.replay or args.gate or args.recompute_costs or args.brief
-                                or args.test_alert or args.watchdog))
+                                or args.test_alert or args.watchdog or args.broker_check or args.gate_1a))
     if args.brief:
         return cmd_brief(args.brief, args.dry_run, args.date)
     if args.test_alert:
@@ -536,6 +583,10 @@ def main(argv=None) -> int:
         return cmd_lab()
     if args.p100:
         return cmd_p100(args.date)
+    if args.broker_check:
+        return cmd_broker_check()
+    if args.gate_1a:
+        return cmd_gate_1a()
     if args.smoke:
         return cmd_smoke()
     if args.once:
