@@ -266,10 +266,11 @@ replays identically. Run this **before** and **after** the checkout and compare:
 ```bash
 sudo -u chambers .venv/bin/python -m chambers.main --replay 2026-09-24 > /tmp/before.txt        # on main
 sudo -u chambers .venv/bin/python -m chambers.main --replay 2026-09-24 --sleeve S0 > /tmp/after.txt  # on phase1a
-diff <(head -n -1 /tmp/before.txt) <(head -n -1 /tmp/after.txt) && echo IDENTICAL
+diff <(tail -n +2 /tmp/before.txt) <(tail -n +2 /tmp/after.txt | head -n -1) && echo IDENTICAL
 ```
 
-(The last line of the 1A output adds S0's random twin for the day, hence `head -n -1`.
+(The 1A output's first line also lists the new `skip_news_days: False` param and its
+last line adds S0's random twin for the day, hence `tail -n +2` / `head -n -1`.
 The replay uses the current params: if a sweep changed them in between, pass the
 same `--params` to both.)
 
