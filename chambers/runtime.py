@@ -66,6 +66,8 @@ def build_engine(cfg: dict, store, broker, clock, sleep_fn: Callable[[float], No
             day_fn = (lambda now: now.astimezone(timezone.utc).date().isoformat()) if sid == "S2" else None
             r.twin = LiveTwin(r, allow_short=r.spec.allow_short, fee_rate=r.fee_rate,
                               fallback_rate=r.fallback_rate, day_fn=day_fn)
+    from .econ import load_into_store
+    load_into_store(store, runners=list(runners.values()))
     sched = Scheduler(store, broker, clock, list(runners.values()), jobs=jobs or [], sleep_fn=sleep_fn,
                       notifier=notifier)
     sched.portfolio = portfolio
@@ -112,7 +114,13 @@ def build_jobs(cfg: dict, store, broker, clock, runners: dict, notifier=None, ba
     from .recon import backup_exists, nightly_backup, run_recon
     fee = float((cfg.get("crypto") or {}).get("fee_rate", 0.0025))
     bdir = Path(backup_dir) if backup_dir else Path(store.path).parent / "backups"
-    steps = [Step("history", lambda d, now: nightly_history(store, broker, clock, cfg, d, now))]
+    from .econ import load_into_store
+
+    def history_step(d, now):
+        load_into_store(store, runners=list(runners.values()))     # pick up edits to econ_calendar.yaml
+        nightly_history(store, broker, clock, cfg, d, now)
+
+    steps = [Step("history", history_step)]
     if p100 is not None:
         steps.append(Step("p100", p100, done=lambda d: store.p100_ledger_for(d) is not None))
     steps.append(Step("recon", lambda d, now: run_recon(store, broker, now, "equity_session", fee, notifier),

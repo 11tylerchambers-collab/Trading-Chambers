@@ -1178,6 +1178,20 @@ class Store:
         return [dict(r) for r in self._query("SELECT * FROM econ_events WHERE date>=? AND date<=? ORDER BY date, time",
                                              (_date_str(start), _date_str(end)))]
 
+    def news_net_rows(self, table: str, sleeve_id: Optional[str], start: str, end: str) -> list[tuple]:
+        """(news_day, net_pnl) of closed rows in `trades` (LIVE) or `twin_trades` exiting between two ET dates."""
+        if table not in ("trades", "twin_trades"):
+            raise ValueError(table)
+        sql = (f"SELECT news_day, net_pnl FROM {table} WHERE exit_ts IS NOT NULL AND substr(exit_ts,1,10)>=? "
+               f"AND substr(exit_ts,1,10)<=?")
+        args: list = [start, end]
+        if table == "trades":
+            sql += " AND profile='LIVE'"
+        if sleeve_id:
+            sql += " AND sleeve_id=?"
+            args.append(sleeve_id)
+        return [(r[0], r[1]) for r in self._query(sql, args)]
+
     def backfill_news_tags(self) -> int:
         """Tag trades / twin trades that have no news_day yet from econ_events (by ET entry date)."""
         n = 0
