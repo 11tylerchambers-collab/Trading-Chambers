@@ -145,3 +145,19 @@ Each entry: what was ambiguous or unstated, what I chose, and why. Ordered by bu
 ## Gate sessions (owner request, 2026-09-24)
 
 - `store.cycle_dates` now counts only dates with at least one `running` cycle. The deploy day (2026-09-22) had a single after-hours `idle` cycle and was being counted as a session with 0% coverage and 0 trades. This does not change when the gate can first pass: five consecutive sessions from 2026-09-23 still end on 2026-09-29.
+
+---
+
+# Phase 1A (PHASE1A_SPEC.md) — built on branch `phase1a`
+
+## Step 1 — migration
+
+- **Schema versioning** uses `PRAGMA user_version` (0 = Phase 0, 1 = Phase 1A). `Store()` always runs the verbatim Phase 0 schema (`SCHEMA_V0`, all `IF NOT EXISTS`) and then the v1 migration, so a fresh database and a migrated Phase 0 database end up with identical schemas (tested).
+- **Backup before migrating.** If the file already had a `trades` table and `user_version < 1`, `Store()` copies it with the sqlite backup API to `data/backups/pre-phase1a-YYYYmmdd-HHMMSS.db` before touching it. The migration is one transaction (`BEGIN IMMEDIATE … COMMIT`, rolled back on any error). It runs the first time the Phase 1A code opens the database, i.e. on the first `python -m chambers.main …` after deploy.
+- **Columns.** `sleeve_id TEXT NOT NULL DEFAULT 'S0'` and `profile TEXT NOT NULL DEFAULT 'LIVE'` on `cycles`, `signals`, `trades`, `params_history`; the defaults are what turn every Phase 0 row into S0/LIVE. `signals.detail_json` holds sleeve-specific numbers (z, ATR, breakout level, EMAs) because the Phase 0 columns (`vwap`, `dev_pct`, `vol_ratio`) are S0's. `trades.news_day`/`event` (§5.4).
+- **`params` and `heartbeat` are rebuilt**, because their Phase 0 `CHECK (id = 1)` singleton cannot be altered in SQLite. `params` is keyed by `(sleeve_id, profile)`; `heartbeat` by `sleeve_id`, with `'ALL'` as the overall row (§10). The Phase 0 rows become `(S0, LIVE)` and `S0`.
+- **Every store accessor defaults to sleeve `S0` / profile `LIVE`**, so all Phase 0 code and tests keep their meaning unchanged; other sleeves pass their id explicitly. `open_trades(None)` / `closed_trades_for_day(d, None)` mean "all sleeves".
+- **Bars: one generic `bars_tf(symbol, timeframe, ts, …)` table** (the §9 "builder's choice") for `1h` (S2), `s4h` (S3) and `1d` (lab L2, morning brief). 1-minute bars stay in the Phase 0 `bars` table, shared by every sleeve and P100. 15-minute and 5-minute bars are not stored: they are rebuilt from 1-minute bars when needed.
+- **S0 replay and sweep read only S0's universe** (`symbols=` on `replay_day`, `load_days`, `run_sweep`, `bar_dates`). Since 1A the `bars` table also holds GLD/USO/SH/PSQ and lab history; letting those into S0's replay would change its result. With a Phase 0 database, "only the universe" and "everything stored" are the same thing.
+- **Extra tables beyond §9:** `twin_seeds` (the logged seed and entry probability per sleeve per day, §4) and `risk_days` (the session-open equity and the daily-loss halt flag, so a restart keeps the halt, §3.2).
+- **Check (§13.1).** A Phase 0 database written by the Phase 0 code (a checkout of `main`) was replayed with the Phase 0 `--replay`, then migrated and replayed with `--replay DATE --sleeve S0`: the two outputs are byte-identical (383 trades, net 4379.92). `tests/test_migration.py` repeats this in-process and checks the backup, row counts, S0/LIVE tagging and the one-time nature of the migration.

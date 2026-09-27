@@ -1,0 +1,137 @@
+# High-impact US economic events used by the Phase 1A news-day filter (PHASE1A_SPEC.md §5.4).
+# Edit freely: one entry per event; a date with any entry is a "news day".
+# Times are US/Eastern release times.
+# Sources:
+#   FOMC: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm  (retrieved 2026-09-27; page last updated 2026-09-16)
+#   CPI: https://www.bls.gov/schedule/news_release/cpi.htm  (retrieved 2026-09-27; cross-checked vs https://www.bls.gov/schedule/2026/home.htm)
+#   Employment Situation: https://www.bls.gov/schedule/news_release/empsit.htm  (retrieved 2026-09-27; cross-checked vs https://www.bls.gov/schedule/2026/home.htm)
+#   PCE / GDP: https://www.bea.gov/news/schedule  (retrieved 2026-09-27; cross-checked vs https://apps.bea.gov/API/signup/release_dates.json and the BEA ICS feed)
+# Caveats:
+#   - The Fed lists 2027 meetings as tentative until confirmed at the preceding meeting.
+#   - As of 2026-09-27, BLS had not published its 2027 schedule (bls.gov/schedule/2027/home.htm returns 404),
+#     and BEA had not published 2027 dates (its "Next Year" tab is empty). All 2027 BLS/BEA entries are
+#     estimates (confirmed: false). 2027 falls on the same weekdays as 2021, so the estimates follow BLS/BEA
+#     2021 release patterns. Replace them once the agencies publish their 2027 schedules.
+#   - The 2025 federal shutdown shifted some late-2025/early-2026 dates. The 2026 dates below come from the
+#     current (post-revision) official schedules. A new shutdown or lapse in appropriations could move them again.
+events:
+  - date: 2026-10-02
+    event: Employment Situation (Sep)
+    time: "08:30"
+    source: BLS
+    confirmed: true
+  - date: 2026-10-14
+    event: CPI (Sep)
+    time: "08:30"
+    source: BLS
+    confirmed: true
+  - date: 2026-10-28
+    event: FOMC decision
+    time: "14:00"
+    source: FOMC
+    confirmed: true
+  - date: 2026-10-29
+    event: GDP advance (Q3 2026)
+    time: "08:30"
+    source: BEA
+    confirmed: true
+  - date: 2026-10-29
+    event: PCE / Personal Income and Outlays (Sep)
+    time: "08:30"
+    source: BEA
+    confirmed: true
+  - date: 2026-11-06
+    event: Employment Situation (Oct)
+    time: "08:30"
+    source: BLS
+    confirmed: true
+  - date: 2026-11-10
+    event: CPI (Oct)
+    time: "08:30"
+    source: BLS
+    confirmed: true
+  - date: 2026-11-25
+    event: PCE / Personal Income and Outlays (Oct)
+    time: "08:30"
+    source: BEA
+    confirmed: true
+  - date: 2026-12-04
+    event: Employment Situation (Nov)
+    time: "08:30"
+    source: BLS
+    confirmed: true
+  - date: 2026-12-09
+    event: FOMC decision
+    time: "14:00"
+    source: FOMC
+    confirmed: true
+  - date: 2026-12-10
+    event: CPI (Nov)
+    time: "08:30"
+    source: BLS
+    confirmed: true
+  - date: 2026-12-23
+    event: PCE / Personal Income and Outlays (Nov)
+    time: "08:30"
+    source: BEA
+    confirmed: true
+  - date: 2027-01-08
+    event: Employment Situation (Dec)
+    time: "08:30"
+    source: BLS
+    confirmed: false  # estimate; BLS 2027 schedule not yet published
+  - date: 2027-01-13
+    event: CPI (Dec)
+    time: "08:30"
+    source: BLS
+    confirmed: false  # estimate; BLS 2027 schedule not yet published
+  - date: 2027-01-27
+    event: FOMC decision
+    time: "14:00"
+    source: FOMC
+    confirmed: true  # listed by the Fed; tentative until confirmed at the Dec 2026 meeting
+  - date: 2027-01-28
+    event: GDP advance (Q4 2026)
+    time: "08:30"
+    source: BEA
+    confirmed: false  # estimate; BEA 2027 schedule not yet published
+  - date: 2027-01-29
+    event: PCE / Personal Income and Outlays (Dec)
+    time: "08:30"
+    source: BEA
+    confirmed: false  # estimate; BEA may release it together with GDP on 2027-01-28
+  - date: 2027-02-05
+    event: Employment Situation (Jan)
+    time: "08:30"
+    source: BLS
+    confirmed: false  # estimate
+  - date: 2027-02-10
+    event: CPI (Jan)
+    time: "08:30"
+    source: BLS
+    confirmed: false  # estimate
+  - date: 2027-02-26
+    event: PCE / Personal Income and Outlays (Jan)
+    time: "08:30"
+    source: BEA
+    confirmed: false  # estimate
+  - date: 2027-03-05
+    event: Employment Situation (Feb)
+    time: "08:30"
+    source: BLS
+    confirmed: false  # estimate
+  - date: 2027-03-10
+    event: CPI (Feb)
+    time: "08:30"
+    source: BLS
+    confirmed: false  # estimate
+  - date: 2027-03-17
+    event: FOMC decision
+    time: "14:00"
+    source: FOMC
+    confirmed: true  # listed by the Fed; tentative until confirmed at the Jan 2027 meeting
+  - date: 2027-03-26
+    event: PCE / Personal Income and Outlays (Feb)
+    time: "08:30"
+    source: BEA
+    confirmed: false  # estimate

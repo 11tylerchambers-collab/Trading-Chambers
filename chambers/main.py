@@ -199,15 +199,19 @@ def apply_param_overrides(base, text: Optional[str]):
     return base.replace(**overrides)
 
 
-def cmd_replay(day: str, params_text: Optional[str] = None) -> int:
+def cmd_replay(day: str, params_text: Optional[str] = None, sleeve: str = "S0") -> int:
     from .replay import replay_day, format_replay
     cfg = load_config()
     store, broker, clock = optional_runtime()
     d = date.fromisoformat(day)
     sess = sessions_for(clock, [day]).get(d)
-    res = replay_day(store, d, apply_param_overrides(current_params(store, cfg), params_text), sess)
-    print(format_replay(res))
-    return 0
+    if sleeve == "S0":
+        res = replay_day(store, d, apply_param_overrides(current_params(store, cfg), params_text), sess,
+                         symbols=cfg["universe"])
+        print(format_replay(res))
+        return 0
+    print(f"unknown sleeve {sleeve!r}", file=sys.stderr)
+    return 2
 
 
 def recompute_costs(store) -> tuple[int, float, float]:
@@ -285,6 +289,7 @@ def main(argv=None) -> int:
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--replay", metavar="YYYY-MM-DD")
     ap.add_argument("--params", metavar="k=v,k=v", help="with --replay: override the live params")
+    ap.add_argument("--sleeve", default="S0", help="with --replay/--sweep: which sleeve (default S0)")
     ap.add_argument("--recompute-costs", action="store_true")
     ap.add_argument("--sweep", action="store_true")
     ap.add_argument("--gate", action="store_true")
@@ -302,7 +307,7 @@ def main(argv=None) -> int:
             apply_param_overrides(Params(), args.params)   # validate before touching the DB
         except ValueError as e:
             ap.error(str(e))
-        return cmd_replay(args.replay, args.params)
+        return cmd_replay(args.replay, args.params, args.sleeve)
     if args.recompute_costs:
         return cmd_recompute_costs()
     if args.sweep:

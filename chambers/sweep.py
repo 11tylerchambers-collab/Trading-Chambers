@@ -72,29 +72,33 @@ def evaluate_grid(days: list[DayData], base: Params) -> list[dict]:
     return [score_combo(days, p) for p in grid_combos(base)]
 
 
-def load_days(store: Store, dates: list[str], sessions: Optional[dict[date, Session]] = None) -> list[DayData]:
+def load_days(store: Store, dates: list[str], sessions: Optional[dict[date, Session]] = None,
+              symbols: Optional[list[str]] = None) -> list[DayData]:
     days = []
     for ds in dates:
         d = date.fromisoformat(ds)
         sess = (sessions or {}).get(d)
-        days.append(build_day(d, store.bars_for_day(d), sess))
+        days.append(build_day(d, store.bars_for_day(d, symbols=symbols), sess))
     return days
 
 
 def run_sweep(store: Store, current: Params, today: date, now: datetime,
               sessions: Optional[dict[date, Session]] = None,
-              min_today_trades: int = MIN_TODAY_TRADES, n_days: int = N_DAYS) -> dict:
+              min_today_trades: int = MIN_TODAY_TRADES, n_days: int = N_DAYS,
+              symbols: Optional[list[str]] = None, sleeve_id: str = "S0", profile: str = "LIVE") -> dict:
     """Run the sweep, write `params` (only if changed) and `params_history`. Returns the summary.
-    Idempotent per session date: if a sweep row for `today` already exists, nothing is evaluated or written."""
+    Idempotent per session date: if a sweep row for `today` already exists, nothing is evaluated or written.
+    `symbols` limits the bars to S0's universe (the `bars` table is shared with other sleeves since Phase 1A).
+    `profile` = 'P100' stores the result as P100's own S0 params instead of the live sleeve's."""
     t0 = time.monotonic()
-    if store.has_sweep_for(today):
+    if store.has_sweep_for(today, sleeve_id, profile):
         log.info("sweep %s: already_swept; skipping", today)
         return {"date": today.isoformat(), "days": [], "current": current.to_dict(), "combos_evaluated": 0,
                 "eligible": 0, "best": None, "best_score": None, "chosen": current.to_dict(), "changed": False,
                 "reason": "already_swept: a sweep row for this date exists in params_history; params unchanged",
                 "results": [], "duration_s": 0.0}
-    dates = store.bar_dates(n_days)
-    today_closed = len(store.closed_trades_for_day(today))
+    dates = store.bar_dates(n_days, symbols=symbols)
+    today_closed = len(store.closed_trades_for_day(today, sleeve_id))
     summary: dict = {"date": today.isoformat(), "days": dates, "current": current.to_dict(),
                      "today_closed_trades": today_closed, "combos_evaluated": 0, "eligible": 0,
                      "best": None, "best_score": None, "chosen": current.to_dict(), "changed": False,
@@ -102,7 +106,7 @@ def run_sweep(store: Store, current: Params, today: date, now: datetime,
     if not dates:
         summary["reason"] = "no_data: no bars stored yet"
     else:
-        days = load_days(store, dates, sessions)
+        days = load_days(store, dates, sessions, symbols)
         results = evaluate_grid(days, current)
         results.sort(key=lambda r: (-r["eligible"], -r["net_pnl"]))
         eligible = [r for r in results if r["eligible"]]
@@ -134,8 +138,8 @@ def run_sweep(store: Store, current: Params, today: date, now: datetime,
     summary["duration_s"] = round(time.monotonic() - t0, 1)
     chosen = Params.from_dict(summary["chosen"])
     if summary["changed"]:
-        store.write_params(chosen.to_dict(), "sweep", now)
-    store.write_params_history(today, chosen.to_dict(), "sweep", summary)
+        store.write_params(chosen.to_dict(), "sweep", now, sleeve_id, profile)
+    store.write_params_history(today, chosen.to_dict(), "sweep", summary, sleeve_id, profile)
     log.info("sweep %s: %s (%.1fs, %d combos, %d eligible)", today, summary["reason"], summary["duration_s"],
              summary["combos_evaluated"], summary["eligible"])
     return summary

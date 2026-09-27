@@ -205,8 +205,11 @@ def replay(day: DayData, params: Params, broker: Optional[ReplayBroker] = None,
     return res
 
 
-def replay_day(store: Store, d: date, params: Params, session: Optional[Session] = None) -> ReplayResult:
-    bars = store.bars_for_day(d)
+def replay_day(store: Store, d: date, params: Params, session: Optional[Session] = None,
+               symbols: Optional[list[str]] = None) -> ReplayResult:
+    """`symbols` limits the replay to a universe (S0 passes its own: since Phase 1A the `bars` table also
+    holds symbols other sleeves and P100 store). None = every stored symbol, the Phase 0 behaviour."""
+    bars = store.bars_for_day(d, symbols=symbols)
     return replay(build_day(d, bars, session), params)
 
 
