@@ -7,6 +7,8 @@
     python -m chambers.main --recompute-costs   re-cost every closed live trade (live_trade_economics)
     python -m chambers.main --sweep     run the nightly sweep now
     python -m chambers.main --gate      Phase 0 acceptance checks 1-6
+
+Phase 1A: --once, --replay and --sweep take --sleeve S0|S1|S2|S3 (default S0).
 """
 from __future__ import annotations
 
@@ -58,6 +60,8 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     if "strategy" not in cfg or "universe" not in cfg:
         raise SystemExit("config.yaml must contain 'strategy' and 'universe'")
     cfg["universe"] = [str(s).upper() for s in cfg["universe"]]
+    if cfg.get("data_feed", "iex") not in ("iex", "sip"):
+        raise SystemExit("config.yaml: data_feed must be 'iex' or 'sip'")
     return cfg
 
 
@@ -96,14 +100,24 @@ def setup_logging(to_file: bool = True) -> None:
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-def build_runtime(creds: dict):
+def build_runtime(creds: dict, cfg: Optional[dict] = None):
     """Store + Broker + MarketClock wired together for live commands."""
     from .broker import Broker
     from .store import Store
     store = Store(DB_PATH)
-    broker = Broker(creds["api_key"], creds["secret_key"], creds["paper"], store=store)
+    if store.migration_backup:
+        print(f"Phase 1A migration: Phase 0 database backed up to {store.migration_backup}")
+    feed = (cfg or {}).get("data_feed") or _config_feed()
+    broker = Broker(creds["api_key"], creds["secret_key"], creds["paper"], store=store, data_feed=feed)
     clock = MarketClock(broker)
     return store, broker, clock
+
+
+def _config_feed() -> str:
+    try:
+        return load_config().get("data_feed", "iex")
+    except Exception:
+        return "iex"
 
 
 # --------------------------------------------------------------------------
@@ -138,14 +152,19 @@ def cmd_smoke() -> int:
     return 0
 
 
-def cmd_once() -> int:
-    from .engine import Engine
+def cmd_once(sleeve: str = "S0") -> int:
+    """One live cycle of one sleeve now. Every sleeve is started and reconciled first: reconciling one
+    sleeve alone would treat the others' broker positions as orphans and flatten them."""
+    from .runtime import build_engine
     cfg = load_config()
     creds = require_paper_env()
-    store, broker, clock = build_runtime(creds)
-    eng = Engine(store, broker, clock, cfg["universe"], cfg["strategy"])
-    eng.startup()
-    result = eng.run_cycle()
+    store, broker, clock = build_runtime(creds, cfg)
+    sched, runners = build_engine(cfg, store, broker, clock)
+    if sleeve not in runners:
+        print(f"sleeve {sleeve} is not active (config.yaml sleeves.{sleeve}.active)", file=sys.stderr)
+        return 2
+    sched.startup()
+    result = runners[sleeve].run_cycle()
     print(result)
     return 0
 
@@ -210,8 +229,54 @@ def cmd_replay(day: str, params_text: Optional[str] = None, sleeve: str = "S0") 
                          symbols=cfg["universe"])
         print(format_replay(res))
         return 0
-    print(f"unknown sleeve {sleeve!r}", file=sys.stderr)
-    return 2
+    return cmd_replay_sleeve(store, clock, cfg, sleeve, d, params_text)
+
+
+def sleeve_params(store, cfg: dict, sleeve: str, text: Optional[str] = None) -> dict:
+    from .strategies import SPECS
+    spec = SPECS[sleeve]
+    live = store.read_params(sleeve)
+    base = spec.params(live["params"] if live else ((cfg.get("sleeves") or {}).get(sleeve) or {}).get("params") or {})
+    if text:
+        over = {}
+        for part in text.split(","):
+            if not part.strip():
+                continue
+            k, sep, v = part.partition("=")
+            if not sep or k.strip() not in spec.types:
+                raise ValueError(f"bad --params entry {part!r}; keys for {sleeve}: {', '.join(spec.types)}")
+            over[k.strip()] = v.strip()
+        base = spec.params({**base, **over})
+    return base
+
+
+def cmd_replay_sleeve(store, clock, cfg: dict, sleeve: str, d: date, params_text: Optional[str]) -> int:
+    """Replay one day of S1/S2/S3 from stored bars, with the day's random twin."""
+    from .sleeve_replay import format_bar_replay, load_window, replay_bars
+    from .strategies import SPECS
+    from .twin import day_seed, trailing_rate
+    spec = SPECS.get(sleeve)
+    if spec is None:
+        print(f"unknown sleeve {sleeve!r}", file=sys.stderr)
+        return 2
+    sessions = {}
+    if clock is not None:
+        try:
+            sessions = clock.sessions_between(d - timedelta(days=200), d)
+        except Exception as e:
+            log.warning("calendar unavailable (%s)", e)
+    n = {"S1": 4, "S2": 10, "S3": 120}[sleeve]
+    series, events, _ = load_window(spec, store, d, sessions, n=n)
+    events = [e for e in events if e.day == d.isoformat()]
+    p = sleeve_params(store, cfg, sleeve, params_text)
+    capital = store.sleeve_equity(sleeve) or float(((cfg.get("sleeves") or {}).get(sleeve) or {}).get("capital", 20000))
+    fee = float((cfg.get("crypto") or {}).get("fee_rate", 0.0025)) if spec.fractional else 0.0
+    seed_row = store.get_twin_seed(sleeve, d.isoformat())
+    twin_p = seed_row["p"] if seed_row else trailing_rate(store, sleeve, d.isoformat())[0]
+    res = replay_bars(spec, series, events, p, capital, fee, twin_seed_for=lambda day: day_seed(sleeve, day),
+                      twin_p=twin_p)
+    print(format_bar_replay(spec, res, d.isoformat()))
+    return 0
 
 
 def recompute_costs(store) -> tuple[int, float, float]:
@@ -235,13 +300,31 @@ def cmd_recompute_costs() -> int:
     return 0
 
 
-def cmd_sweep() -> int:
+def cmd_sweep(sleeve: str = "S0") -> int:
     from .sweep import run_sweep, N_DAYS
     cfg = load_config()
     store, broker, clock = optional_runtime()
     today = now_et().date()
-    sessions = sessions_for(clock, store.bar_dates(N_DAYS))
-    summary = run_sweep(store, current_params(store, cfg), today, now_et(), sessions=sessions)
+    if sleeve != "S0":
+        from .sleeve_replay import run_bar_sweep
+        from .strategies import SPECS
+        spec = SPECS[sleeve]
+        sessions = {}
+        if clock is not None:
+            try:
+                sessions = clock.sessions_between(today - timedelta(days=200), today)
+            except Exception as e:
+                log.warning("calendar unavailable (%s)", e)
+        capital = store.sleeve_equity(sleeve) or 20000.0
+        fee = float((cfg.get("crypto") or {}).get("fee_rate", 0.0025)) if spec.fractional else 0.0
+        s = run_bar_sweep(store, spec, sleeve_params(store, cfg, sleeve), today, now_et(), capital, fee, sessions)
+        print(f"sweep {sleeve} {s['date']}: {s['reason']}\n  days={len(s.get('days', []))} combos={s.get('combos_evaluated')}"
+              f" eligible={s.get('eligible')} evidence_trades={s.get('evidence_trades')}\n  best={s.get('best')} "
+              f"score={s.get('best_score')}\n  chosen={s['chosen']}")
+        return 0
+    sessions = sessions_for(clock, store.bar_dates(N_DAYS, symbols=cfg["universe"]))
+    summary = run_sweep(store, current_params(store, cfg), today, now_et(), sessions=sessions,
+                        symbols=cfg["universe"])
     print(summary_text(summary))
     return 0
 
@@ -268,14 +351,12 @@ def cmd_gate() -> int:
 def cmd_run() -> int:
     """The service: engine loop in the main thread, dashboard in a daemon thread."""
     import threading
-    from .engine import Engine
     from .dashboard.app import serve
-    from .scheduler import Scheduler
+    from .runtime import build_engine
     cfg = load_config()
     creds = require_paper_env()
-    store, broker, clock = build_runtime(creds)
-    eng = Engine(store, broker, clock, cfg["universe"], cfg["strategy"])
-    sched = Scheduler(store, broker, clock, [eng])
+    store, broker, clock = build_runtime(creds, cfg)
+    sched, runners = build_engine(cfg, store, broker, clock)
     t = threading.Thread(target=serve, kwargs={"db_path": DB_PATH, "password": creds["dash_password"],
                                                "broker": broker, "clock": clock, "universe": cfg["universe"],
                                                "host": "0.0.0.0", "port": 8080},
@@ -302,18 +383,23 @@ def main(argv=None) -> int:
     if args.smoke:
         return cmd_smoke()
     if args.once:
-        return cmd_once()
+        return cmd_once(args.sleeve)
     if args.replay:
         from .strategy import Params
         try:
-            apply_param_overrides(Params(), args.params)   # validate before touching the DB
+            if args.sleeve == "S0":
+                apply_param_overrides(Params(), args.params)   # validate before touching the DB
+            else:
+                from .strategies import SPECS
+                if args.sleeve not in SPECS:
+                    ap.error(f"unknown sleeve {args.sleeve}")
         except ValueError as e:
             ap.error(str(e))
         return cmd_replay(args.replay, args.params, args.sleeve)
     if args.recompute_costs:
         return cmd_recompute_costs()
     if args.sweep:
-        return cmd_sweep()
+        return cmd_sweep(args.sleeve)
     if args.gate:
         return cmd_gate()
     return cmd_run()

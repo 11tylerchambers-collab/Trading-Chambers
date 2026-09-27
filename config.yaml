@@ -29,3 +29,33 @@ universe:
   - INTC
   - CRM
   - AVGO
+
+# ---------------------------------------------------------------- Phase 1A
+# The `strategy` and `universe` above are sleeve S0 (Phase 0 VWAP reversion, unchanged).
+data_feed: iex               # iex | sip  (sip needs a paid Alpaca data plan; no code change to switch)
+risk:
+  daily_loss_pct: 0.02       # halt new equity-sleeve entries when P&L since the open < −2% of equity
+  max_same_side: 15          # open positions in one direction across all sleeves
+crypto:
+  fee_rate: 0.0025           # Alpaca crypto taker fee, volume tier 1 (market orders are takers); see DECISIONS.md
+sleeves:                     # capital = starting virtual capital; each sleeve's P&L accrues to its own balance
+  S0:
+    capital: 20000
+    active: true
+  S1:                        # SPY/QQQ 15-min mean reversion
+    capital: 20000
+    active: true
+    params: {entry_z: 2.0, stop_atr: 2.0, max_hold_bars: 8, reentry_cooldown_bars: 2,
+             risk_pct: 0.01, max_notional_pct: 0.50, skip_news_days: false}
+  S2:                        # BTC/USD 1-hour breakout, 24/7, long only
+    capital: 20000
+    active: true
+    params: {lookback: 24, vol_mult: 1.5, exit_lookback: 12, stop_atr: 2.0, reentry_cooldown_bars: 2,
+             risk_pct: 0.01, max_notional_pct: 0.50, skip_news_days: false}
+  S3:                        # GLD/USO session-4h trend following, holds overnight
+    capital: 20000
+    active: true
+    params: {fast: 10, slow: 30, stop_atr: 2.5, reentry_cooldown_bars: 2,
+             risk_pct: 0.01, max_notional_pct: 0.50, skip_news_days: false}
+p100:
+  extra_symbols: [SH, PSQ]   # inverse ETFs stored nightly for the $100 cash-account replay (§8)

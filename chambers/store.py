@@ -155,6 +155,7 @@ MIGRATION_V1 = [
     "ALTER TABLE trades ADD COLUMN profile TEXT NOT NULL DEFAULT 'LIVE'",
     "ALTER TABLE trades ADD COLUMN news_day INTEGER",
     "ALTER TABLE trades ADD COLUMN event TEXT",
+    "ALTER TABLE trades ADD COLUMN exit_bar_ts TEXT",   # S1–S3: the bar an exit acted on (cooldown across restarts)
     "ALTER TABLE params_history ADD COLUMN sleeve_id TEXT NOT NULL DEFAULT 'S0'",
     "ALTER TABLE params_history ADD COLUMN profile TEXT NOT NULL DEFAULT 'LIVE'",
     # --- params: one row per (sleeve, profile) instead of the id=1 singleton
@@ -438,6 +439,7 @@ class Trade:
     profile: str = "LIVE"
     news_day: Optional[int] = None
     event: Optional[str] = None
+    exit_bar_ts: Optional[str] = None
 
     @property
     def is_open(self) -> bool:
@@ -725,6 +727,15 @@ class Store:
             " bars_held=?, mae_pct=?, mfe_pct=?, gross_pnl=?, est_cost=?, net_pnl=? WHERE id=?",
             (iso(exit_ts), exit_price, exit_order_id, exit_bid, exit_ask, exit_reason,
              bars_held, mae_pct, mfe_pct, gross_pnl, est_cost, net_pnl, trade_id))
+
+    def set_exit_bar(self, trade_id: int, bar_ts: datetime) -> None:
+        self._exec("UPDATE trades SET exit_bar_ts=? WHERE id=?", (iso(bar_ts), trade_id))
+
+    def last_exit_bars(self, sleeve_id: str) -> dict[str, str]:
+        """symbol -> exit_bar_ts of the sleeve's most recent closed trade that recorded one."""
+        rows = self._query("SELECT symbol, exit_bar_ts FROM trades WHERE sleeve_id=? AND exit_bar_ts IS NOT NULL "
+                           "ORDER BY id", (sleeve_id,))
+        return {r["symbol"]: r["exit_bar_ts"] for r in rows}
 
     def update_trade_economics(self, trade_id: int, gross_pnl: float, est_cost: float, net_pnl: float) -> None:
         self._exec("UPDATE trades SET gross_pnl=?, est_cost=?, net_pnl=? WHERE id=?",

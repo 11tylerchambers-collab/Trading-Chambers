@@ -43,6 +43,7 @@ class Scheduler:
         self._stop = False
         self.started_at: Optional[datetime] = None
         self._backoff: dict[int, datetime] = {}   # runner index -> not before (after an exception)
+        self._last_reconcile: Optional[tuple[datetime, dict]] = None
         for r in self.runners:
             r.coordinator = self
             r.handle_flatten_requests = False
@@ -74,8 +75,13 @@ class Scheduler:
 
     # ---- coordinator ---------------------------------------------------------
     def reconcile(self) -> dict:
+        """One pass over every sleeve. Several sleeves ask at their preopen within the same minute;
+        a pass younger than 60 s is reused."""
         now = self.now()
+        if self._last_reconcile is not None and (now - self._last_reconcile[0]).total_seconds() < 60:
+            return self._last_reconcile[1]
         res = reconcile_sleeves(self.runners, self.store, self.broker, now, self._log_error)
+        self._last_reconcile = (now, res)
         if (res["orphans"] or res["missing"]) and self.notifier is not None:
             self.notifier.alert("reconcile", f"Reconcile: orphans flattened {res['orphans'] or 'none'}; "
                                              f"trades closed as missing {res['missing'] or 'none'}", now)

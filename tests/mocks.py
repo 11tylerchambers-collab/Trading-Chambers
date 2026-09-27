@@ -46,6 +46,7 @@ class MockBroker:
         self.fill_after_polls = None      # with a non-filled fill_status: the order fills in full on this poll
         self.cancelled_orders = []
         self.equity = 100000.0            # account equity (Phase 1A risk checks move it)
+        self.tf_bars = {}                 # (symbol, minutes) -> bars for bars()/crypto_bars()
 
     def _hit(self, name):
         self.calls[name] = self.calls.get(name, 0) + 1
@@ -92,8 +93,9 @@ class MockBroker:
     def _move(self, symbol, signed, px):
         if not signed:
             return
-        new = self.positions_.get(symbol, 0) + int(signed)
-        if new == 0:
+        new = self.positions_.get(symbol, 0) + signed
+        new = int(new) if float(new).is_integer() else round(new, 9)
+        if abs(new) < 1e-12:
             self.positions_.pop(symbol, None)
         else:
             self.positions_[symbol] = new
@@ -136,6 +138,33 @@ class MockBroker:
             if sel:
                 out[s] = sel
         return out
+
+    def bars(self, symbols, start, end, minutes):
+        self._hit("bars")
+        out = {}
+        for s in symbols:
+            sel = [b for b in self.tf_bars.get((s, minutes), []) if start <= b.ts < end]
+            if sel:
+                out[s] = sel
+        return out
+
+    def crypto_bars(self, symbols, start, end, minutes=60):
+        self._hit("crypto_bars")
+        out = {}
+        for s in symbols:
+            sel = [b for b in self.tf_bars.get((s, minutes), []) if start <= b.ts < end]
+            if sel:
+                out[s] = sel
+        return out
+
+    def latest_prices(self, symbols):
+        self._hit("latest_prices")
+        return {s: self._price(s) for s in symbols}
+
+    def account_details(self):
+        self._hit("account_details")
+        return {"equity": self.equity, "last_equity": self.equity, "multiplier": "2", "pattern_day_trader": False,
+                "daytrade_count": 0, "account_type": None, "status": "ACTIVE", "shorting_enabled": True}
 
     def quotes(self, symbols):
         self._hit("quotes")
