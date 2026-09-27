@@ -270,16 +270,18 @@ def cmd_run() -> int:
     import threading
     from .engine import Engine
     from .dashboard.app import serve
+    from .scheduler import Scheduler
     cfg = load_config()
     creds = require_paper_env()
     store, broker, clock = build_runtime(creds)
     eng = Engine(store, broker, clock, cfg["universe"], cfg["strategy"])
+    sched = Scheduler(store, broker, clock, [eng])
     t = threading.Thread(target=serve, kwargs={"db_path": DB_PATH, "password": creds["dash_password"],
                                                "broker": broker, "clock": clock, "universe": cfg["universe"],
                                                "host": "0.0.0.0", "port": 8080},
                          daemon=True, name="dashboard")
     t.start()
-    eng.run_forever()
+    sched.run_forever()
     return 0
 
 
