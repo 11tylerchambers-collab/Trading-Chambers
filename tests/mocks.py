@@ -45,6 +45,7 @@ class MockBroker:
         self.partial_qty = 0              # with fill_status "partially_filled": shares filled at once
         self.fill_after_polls = None      # with a non-filled fill_status: the order fills in full on this poll
         self.cancelled_orders = []
+        self.equity = 100000.0            # account equity (Phase 1A risk checks move it)
 
     def _hit(self, name):
         self.calls[name] = self.calls.get(name, 0) + 1
@@ -59,7 +60,7 @@ class MockBroker:
 
     def account(self):
         self._hit("account")
-        return {"portfolio_value": 100000.0, "buying_power": 200000.0, "cash": 100000.0, "equity": 100000.0}
+        return {"portfolio_value": self.equity, "buying_power": 200000.0, "cash": 100000.0, "equity": self.equity}
 
     def positions(self):
         self._hit("positions")

@@ -286,6 +286,17 @@ class SleeveBase:
     def trade_economics(self, side, qty, entry_price, exit_price, eb, ea, xb, xa) -> tuple[float, float, float]:
         return live_trade_economics(side, qty, entry_price, exit_price, eb, ea, xb, xa, self.fee_rate)
 
+    def risk_tick(self, now: datetime, res: "CycleResult") -> None:
+        """Every cycle: let the portfolio see the daily P&L, so the loss limit trips (and alerts) even when
+        no entry is attempted."""
+        if self.portfolio is None:
+            return
+        try:
+            self.portfolio.check_daily_loss(now)
+        except Exception as e:
+            res.errors += 1
+            self._log_error("cycle.risk", e)
+
     # ---- entry gates (after the strategy fired) --------------------------------
     def entry_gate(self, symbol: str, side: str, notional: float, skip_news_days: bool,
                    now: datetime) -> Optional[str]:
@@ -714,6 +725,7 @@ class Engine(SleeveBase):
         except Exception as e:
             res.errors += 1
             self._log_error("cycle.controls", e)
+        self.risk_tick(now, res)
 
         # 2. bars
         bars_ok = False
