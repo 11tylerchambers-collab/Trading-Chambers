@@ -81,3 +81,56 @@ def s0_fallback_rate(eng: Engine) -> Optional[float]:
         return None
     r = replay_day(eng.store, date.fromisoformat(dates[0]), eng.params, symbols=eng.universe)
     return r.signals_fired / r.signals_evaluated if r.signals_evaluated else None
+
+
+# --------------------------------------------------------------------------
+# scheduled jobs
+# --------------------------------------------------------------------------
+
+LAB_SYMBOLS = ["SPY", "QQQ"]
+LAB_SESSIONS = 60
+DAILY_SYMBOLS = ["SPY", "QQQ", "GLD", "USO"]
+DAILY_HISTORY = 260
+
+
+def nightly_history(store, broker, clock, cfg: dict, d, now) -> None:
+    """The day's 1-min bars for P100's inverse ETFs, plus the night lab's history (engine = single writer)."""
+    from datetime import timedelta
+    from . import history
+    extra = list((cfg.get("p100") or {}).get("extra_symbols") or ["SH", "PSQ"])
+    history.ensure_1m(store, broker, clock, extra, 5, d + timedelta(days=1))
+    history.ensure_1m(store, broker, clock, LAB_SYMBOLS, LAB_SESSIONS, d + timedelta(days=1))
+    history.ensure_daily(store, broker, DAILY_SYMBOLS, DAILY_HISTORY, now)
+
+
+def build_jobs(cfg: dict, store, broker, clock, runners: dict, notifier=None, backup_dir=None,
+               evening=None, p100=None, lab=None, morning=None) -> list:
+    """The nightly chain (+ the morning brief when `morning` is given). `evening`, `p100` and `lab` are
+    callables (d, now) supplied by main; a missing one is simply not scheduled."""
+    from pathlib import Path
+    from .jobs import MorningBrief, NightlyJobs, Step
+    from .recon import backup_exists, nightly_backup, run_recon
+    fee = float((cfg.get("crypto") or {}).get("fee_rate", 0.0025))
+    bdir = Path(backup_dir) if backup_dir else Path(store.path).parent / "backups"
+    steps = [Step("history", lambda d, now: nightly_history(store, broker, clock, cfg, d, now))]
+    if p100 is not None:
+        steps.append(Step("p100", p100, done=lambda d: store.p100_ledger_for(d) is not None))
+    steps.append(Step("recon", lambda d, now: run_recon(store, broker, now, "equity_session", fee, notifier),
+                      done=lambda d: any(r["kind"] == "equity_session" and r["status"] != "error"
+                                         for r in store.recon_for_day(d))))
+    steps.append(Step("backup", lambda d, now: nightly_backup(store, bdir, d), done=lambda d: backup_exists(bdir, d)))
+    if evening is not None:
+        steps.append(Step("evening", evening, done=lambda d: any(
+            a["ts"][:10] == d.isoformat() and a["status"] in ("sent", "disabled", "dry_run")
+            for a in store.recent_alerts(20, kind="evening"))))
+    if lab is not None:
+        steps.append(Step("lab", lab, done=lambda d: any((r["started_at"] or "")[:10] == d.isoformat()
+                                                        for r in store.lab_runs(5))))
+    waits = [sid for sid in ("S0", "S1", "S3") if sid in runners]
+    jobs: list = [NightlyJobs(store, clock, steps, waits)]
+    if morning is not None:
+        jobs.append(MorningBrief(store, clock, morning))
+    s2 = runners.get("S2")
+    if s2 is not None:
+        s2.after_rollover = lambda now: run_recon(store, broker, now, "crypto_rollover", fee, notifier)
+    return jobs

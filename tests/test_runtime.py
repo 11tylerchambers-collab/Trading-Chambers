@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 import yaml
 
 from chambers.clock import ET
-from chambers.runtime import build_engine
+from chambers.runtime import build_engine, build_jobs
 from chambers.store import Bar, Store
 
 from .mocks import UNIVERSE, FakeTime, MockBroker, flat_bars, make_clock
@@ -41,6 +41,7 @@ def test_full_day_all_sleeves_one_process(tmp_path):
     sched, runners, st, broker, ft = world(tmp_path, datetime(2026, 9, 22, 9, 0, tzinfo=ET))
     assert list(runners) == ["S0", "S1", "S2", "S3"]
     assert [s["id"] for s in st.sleeves()] == ["S0", "S1", "S2", "S3"] and st.sleeves()[1]["capital"] == 20000
+    sched.jobs = build_jobs(config(), st, broker, sched.clock, runners, backup_dir=tmp_path / "backups")
     sched.startup()
     while ft.now < datetime(2026, 9, 22, 21, 0, tzinfo=ET):
         sched.tick()
@@ -54,6 +55,12 @@ def test_full_day_all_sleeves_one_process(tmp_path):
     hb = st.read_heartbeats()
     assert set(hb) >= {"ALL", "S0", "S1", "S2", "S3"}
     assert st.errors_count(where_like="unhandled%") == 0
+    # the nightly chain ran after the sweeps: recon (baseline on a new db) and the backup
+    # (S2's startup catch-up sweep of the 09-21 UTC day ran one too)
+    assert [r["kind"] for r in st.recon_for_day(D)] == ["crypto_rollover", "equity_session", "crypto_rollover"]
+    assert (tmp_path / "backups" / "chambers-2026-09-22.db").exists()
+    # S2's 00:30 UTC rollover (20:30 ET) swept the UTC day and ran the crypto recon
+    assert st.has_sweep_for("2026-09-22", "S2") and st.last_recon()["kind"] == "crypto_rollover"
     seeds = st._query("SELECT sleeve_id, day FROM twin_seeds ORDER BY sleeve_id")
     assert {r["sleeve_id"] for r in seeds} == {"S0", "S1", "S2", "S3"}
 

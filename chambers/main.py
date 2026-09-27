@@ -365,11 +365,12 @@ def cmd_run() -> int:
     """The service: engine loop in the main thread, dashboard in a daemon thread."""
     import threading
     from .dashboard.app import serve
-    from .runtime import build_engine
+    from .runtime import build_engine, build_jobs
     cfg = load_config()
     creds = require_paper_env()
     store, broker, clock = build_runtime(creds, cfg)
     sched, runners = build_engine(cfg, store, broker, clock)
+    sched.jobs = build_jobs(cfg, store, broker, clock, runners, backup_dir=DATA_DIR / "backups")
     t = threading.Thread(target=serve, kwargs={"db_path": DB_PATH, "password": creds["dash_password"],
                                                "broker": broker, "clock": clock, "universe": cfg["universe"],
                                                "host": "0.0.0.0", "port": 8080},
