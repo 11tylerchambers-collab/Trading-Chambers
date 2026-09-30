@@ -10,9 +10,13 @@ from typing import Optional
 
 REASONS = ("fired", "no_position_slot", "already_in_position", "dev_too_small", "vol_too_low",
            "short_disabled", "insufficient_bars", "entries_closed", "cooldown")
+# Phase 1A: a fired signal can still be skipped by a gate after the strategy (engine.SleeveBase.entry_gate);
+# the signal row then carries fired=0 and one of these reasons, with all its numbers.
+GATE_REASONS = ("news_day", "daily_loss_halt", "same_side_cap", "exposure_cap", "notional_cap")
 
 PARAM_KEYS = ("entry_dev_pct", "vol_mult", "max_hold_bars", "stop_pct", "allow_short",
-              "notional_per_trade", "max_open_positions", "min_bars_before_entry", "reentry_cooldown_bars")
+              "notional_per_trade", "max_open_positions", "min_bars_before_entry", "reentry_cooldown_bars",
+              "skip_news_days")
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,7 @@ class Params:
     max_open_positions: int = 20
     min_bars_before_entry: int = 20
     reentry_cooldown_bars: int = 5   # bars after an exit before the same symbol may be entered again
+    skip_news_days: bool = False     # Phase 1A §5.4: no entries on econ-calendar days
 
     @classmethod
     def from_dict(cls, d: dict) -> "Params":
@@ -43,6 +48,7 @@ class Params:
             max_open_positions=int(base["max_open_positions"]),
             min_bars_before_entry=int(base["min_bars_before_entry"]),
             reentry_cooldown_bars=int(base["reentry_cooldown_bars"]),
+            skip_news_days=_as_bool(base["skip_news_days"]),
         )
 
     def to_dict(self) -> dict:

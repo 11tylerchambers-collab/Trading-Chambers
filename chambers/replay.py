@@ -60,6 +60,7 @@ class DayData:
     at: dict[datetime, list[Snapshot]]           # bar ts → snapshots of symbols that have that bar
     last_snapshot: dict[str, Snapshot]           # symbol → last snapshot of the day (for eod fill)
     bar_count: int = 0
+    news_day: bool = False                       # Phase 1A: an econ-calendar day (skip_news_days)
 
 
 def default_session(d: date) -> Session:
@@ -68,7 +69,8 @@ def default_session(d: date) -> Session:
                    datetime(d.year, d.month, d.day, 16, 0, tzinfo=ET))
 
 
-def build_day(d: date, bars_by_symbol: dict[str, list[Bar]], session: Optional[Session] = None) -> DayData:
+def build_day(d: date, bars_by_symbol: dict[str, list[Bar]], session: Optional[Session] = None,
+              news_day: bool = False) -> DayData:
     session = session or default_session(d)
     at: dict[datetime, list[Snapshot]] = {}
     last: dict[str, Snapshot] = {}
@@ -83,7 +85,7 @@ def build_day(d: date, bars_by_symbol: dict[str, list[Bar]], session: Optional[S
             at.setdefault(b.ts, []).append(snap)
             last[sym] = snap
             n += 1
-    return DayData(d, session, sorted(at), at, last, n)
+    return DayData(d, session, sorted(at), at, last, n, news_day)
 
 
 @dataclass
@@ -175,8 +177,8 @@ def replay(day: DayData, params: Params, broker: Optional[ReplayBroker] = None,
             reason = check_exit(pos, snap.last_close, snap.vwap, params)
             if reason:
                 close(pos, snap.last_close, cycle_now, reason, snap.bar_count)
-        # entries
-        entries_ok = session.entries_allowed(cycle_now)
+        # entries (Phase 1A: none on a news day when skip_news_days is on, as the live gate does)
+        entries_ok = session.entries_allowed(cycle_now) and not (params.skip_news_days and day.news_day)
         if not entries_ok:
             continue
         for snap in snaps:
@@ -205,9 +207,12 @@ def replay(day: DayData, params: Params, broker: Optional[ReplayBroker] = None,
     return res
 
 
-def replay_day(store: Store, d: date, params: Params, session: Optional[Session] = None) -> ReplayResult:
-    bars = store.bars_for_day(d)
-    return replay(build_day(d, bars, session), params)
+def replay_day(store: Store, d: date, params: Params, session: Optional[Session] = None,
+               symbols: Optional[list[str]] = None) -> ReplayResult:
+    """`symbols` limits the replay to a universe (S0 passes its own: since Phase 1A the `bars` table also
+    holds symbols other sleeves and P100 store). None = every stored symbol, the Phase 0 behaviour."""
+    bars = store.bars_for_day(d, symbols=symbols)
+    return replay(build_day(d, bars, session, bool(store.econ_events_on(d))), params)
 
 
 def format_replay(res: ReplayResult) -> str:

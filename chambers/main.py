@@ -7,6 +7,16 @@
     python -m chambers.main --recompute-costs   re-cost every closed live trade (live_trade_economics)
     python -m chambers.main --sweep     run the nightly sweep now
     python -m chambers.main --gate      Phase 0 acceptance checks 1-6
+
+Phase 1A: --once, --replay and --sweep take --sleeve S0|S1|S2|S3 (default S0).
+    python -m chambers.main --brief morning|evening [--dry-run] [--date YYYY-MM-DD]
+                                        build (and send, unless --dry-run) a Telegram message
+    python -m chambers.main --test-alert    send one test alert
+    python -m chambers.main --watchdog      alert if any sleeve's heartbeat is > 3 min stale (run by a timer)
+    python -m chambers.main --lab           the night lab (normally started by the engine at nice 10)
+    python -m chambers.main --p100 [--date YYYY-MM-DD]   replay one day as the $100 cash account
+    python -m chambers.main --broker-check  account type, PDT flag, day-trade count (report only)
+    python -m chambers.main --gate-1a       Phase 1A gate checks over the last 10 sessions
 """
 from __future__ import annotations
 
@@ -58,6 +68,8 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     if "strategy" not in cfg or "universe" not in cfg:
         raise SystemExit("config.yaml must contain 'strategy' and 'universe'")
     cfg["universe"] = [str(s).upper() for s in cfg["universe"]]
+    if cfg.get("data_feed", "iex") not in ("iex", "sip"):
+        raise SystemExit("config.yaml: data_feed must be 'iex' or 'sip'")
     return cfg
 
 
@@ -96,14 +108,24 @@ def setup_logging(to_file: bool = True) -> None:
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-def build_runtime(creds: dict):
+def build_runtime(creds: dict, cfg: Optional[dict] = None):
     """Store + Broker + MarketClock wired together for live commands."""
     from .broker import Broker
     from .store import Store
     store = Store(DB_PATH)
-    broker = Broker(creds["api_key"], creds["secret_key"], creds["paper"], store=store)
+    if store.migration_backup:
+        print(f"Phase 1A migration: Phase 0 database backed up to {store.migration_backup}")
+    feed = (cfg or {}).get("data_feed") or _config_feed()
+    broker = Broker(creds["api_key"], creds["secret_key"], creds["paper"], store=store, data_feed=feed)
     clock = MarketClock(broker)
     return store, broker, clock
+
+
+def _config_feed() -> str:
+    try:
+        return load_config().get("data_feed", "iex")
+    except Exception:
+        return "iex"
 
 
 # --------------------------------------------------------------------------
@@ -138,14 +160,19 @@ def cmd_smoke() -> int:
     return 0
 
 
-def cmd_once() -> int:
-    from .engine import Engine
+def cmd_once(sleeve: str = "S0") -> int:
+    """One live cycle of one sleeve now. Every sleeve is started and reconciled first: reconciling one
+    sleeve alone would treat the others' broker positions as orphans and flatten them."""
+    from .runtime import build_engine
     cfg = load_config()
     creds = require_paper_env()
-    store, broker, clock = build_runtime(creds)
-    eng = Engine(store, broker, clock, cfg["universe"], cfg["strategy"])
-    eng.startup()
-    result = eng.run_cycle()
+    store, broker, clock = build_runtime(creds, cfg)
+    sched, runners = build_engine(cfg, store, broker, clock)
+    if sleeve not in runners:
+        print(f"sleeve {sleeve} is not active (config.yaml sleeves.{sleeve}.active)", file=sys.stderr)
+        return 2
+    sched.startup()
+    result = runners[sleeve].run_cycle()
     print(result)
     return 0
 
@@ -199,14 +226,77 @@ def apply_param_overrides(base, text: Optional[str]):
     return base.replace(**overrides)
 
 
-def cmd_replay(day: str, params_text: Optional[str] = None) -> int:
+def cmd_replay(day: str, params_text: Optional[str] = None, sleeve: str = "S0") -> int:
     from .replay import replay_day, format_replay
     cfg = load_config()
     store, broker, clock = optional_runtime()
     d = date.fromisoformat(day)
     sess = sessions_for(clock, [day]).get(d)
-    res = replay_day(store, d, apply_param_overrides(current_params(store, cfg), params_text), sess)
-    print(format_replay(res))
+    if sleeve == "S0":
+        params = apply_param_overrides(current_params(store, cfg), params_text)
+        res = replay_day(store, d, params, sess, symbols=cfg["universe"])
+        print(format_replay(res))
+        print(twin_line(store, d, params, sess, cfg["universe"], res.net_pnl))
+        return 0
+    return cmd_replay_sleeve(store, clock, cfg, sleeve, d, params_text)
+
+
+def twin_line(store, d: date, params, sess, universe: list[str], sleeve_net: float) -> str:
+    """S0's random twin for the day, from the logged seed and p (reproduces the live twin)."""
+    from .replay import build_day
+    from .twin import day_seed, replay_twin_s0, trailing_rate
+    row = store.get_twin_seed("S0", d.isoformat())
+    seed, p, src = (row["seed"], row["p"], "logged") if row else \
+        (day_seed("S0", d.isoformat()), trailing_rate(store, "S0", d.isoformat())[0], "computed")
+    tw = replay_twin_s0(build_day(d, store.bars_for_day(d, symbols=universe), sess), params, seed, p)
+    return (f"twin ({src} seed={seed} p={p:.5f}): trades={len(tw.trades)} net={tw.net_pnl:.2f}  "
+            f"edge vs twin={sleeve_net - tw.net_pnl:.2f}")
+
+
+def sleeve_params(store, cfg: dict, sleeve: str, text: Optional[str] = None) -> dict:
+    from .strategies import SPECS
+    spec = SPECS[sleeve]
+    live = store.read_params(sleeve)
+    base = spec.params(live["params"] if live else ((cfg.get("sleeves") or {}).get(sleeve) or {}).get("params") or {})
+    if text:
+        over = {}
+        for part in text.split(","):
+            if not part.strip():
+                continue
+            k, sep, v = part.partition("=")
+            if not sep or k.strip() not in spec.types:
+                raise ValueError(f"bad --params entry {part!r}; keys for {sleeve}: {', '.join(spec.types)}")
+            over[k.strip()] = v.strip()
+        base = spec.params({**base, **over})
+    return base
+
+
+def cmd_replay_sleeve(store, clock, cfg: dict, sleeve: str, d: date, params_text: Optional[str]) -> int:
+    """Replay one day of S1/S2/S3 from stored bars, with the day's random twin."""
+    from .sleeve_replay import format_bar_replay, load_window, replay_bars
+    from .strategies import SPECS
+    from .twin import day_seed, trailing_rate
+    spec = SPECS.get(sleeve)
+    if spec is None:
+        print(f"unknown sleeve {sleeve!r}", file=sys.stderr)
+        return 2
+    sessions = {}
+    if clock is not None:
+        try:
+            sessions = clock.sessions_between(d - timedelta(days=200), d)
+        except Exception as e:
+            log.warning("calendar unavailable (%s)", e)
+    n = {"S1": 4, "S2": 10, "S3": 120}[sleeve]
+    series, events, _ = load_window(spec, store, d, sessions, n=n)
+    events = [e for e in events if e.day == d.isoformat()]
+    p = sleeve_params(store, cfg, sleeve, params_text)
+    capital = store.sleeve_equity(sleeve) or float(((cfg.get("sleeves") or {}).get(sleeve) or {}).get("capital", 20000))
+    fee = float((cfg.get("crypto") or {}).get("fee_rate", 0.0025)) if spec.fractional else 0.0
+    seed_row = store.get_twin_seed(sleeve, d.isoformat())
+    twin_p = seed_row["p"] if seed_row else trailing_rate(store, sleeve, d.isoformat())[0]
+    res = replay_bars(spec, series, events, p, capital, fee, twin_seed_for=lambda day: day_seed(sleeve, day),
+                      twin_p=twin_p)
+    print(format_bar_replay(spec, res, d.isoformat()))
     return 0
 
 
@@ -231,13 +321,31 @@ def cmd_recompute_costs() -> int:
     return 0
 
 
-def cmd_sweep() -> int:
+def cmd_sweep(sleeve: str = "S0") -> int:
     from .sweep import run_sweep, N_DAYS
     cfg = load_config()
     store, broker, clock = optional_runtime()
     today = now_et().date()
-    sessions = sessions_for(clock, store.bar_dates(N_DAYS))
-    summary = run_sweep(store, current_params(store, cfg), today, now_et(), sessions=sessions)
+    if sleeve != "S0":
+        from .sleeve_replay import run_bar_sweep
+        from .strategies import SPECS
+        spec = SPECS[sleeve]
+        sessions = {}
+        if clock is not None:
+            try:
+                sessions = clock.sessions_between(today - timedelta(days=200), today)
+            except Exception as e:
+                log.warning("calendar unavailable (%s)", e)
+        capital = store.sleeve_equity(sleeve) or 20000.0
+        fee = float((cfg.get("crypto") or {}).get("fee_rate", 0.0025)) if spec.fractional else 0.0
+        s = run_bar_sweep(store, spec, sleeve_params(store, cfg, sleeve), today, now_et(), capital, fee, sessions)
+        print(f"sweep {sleeve} {s['date']}: {s['reason']}\n  days={len(s.get('days', []))} combos={s.get('combos_evaluated')}"
+              f" eligible={s.get('eligible')} evidence_trades={s.get('evidence_trades')}\n  best={s.get('best')} "
+              f"score={s.get('best_score')}\n  chosen={s['chosen']}")
+        return 0
+    sessions = sessions_for(clock, store.bar_dates(N_DAYS, symbols=cfg["universe"]))
+    summary = run_sweep(store, current_params(store, cfg), today, now_et(), sessions=sessions,
+                        symbols=cfg["universe"])
     print(summary_text(summary))
     return 0
 
@@ -264,19 +372,181 @@ def cmd_gate() -> int:
 def cmd_run() -> int:
     """The service: engine loop in the main thread, dashboard in a daemon thread."""
     import threading
-    from .engine import Engine
     from .dashboard.app import serve
+    from .notify import Notifier
+    from .runtime import build_engine, build_jobs
     cfg = load_config()
     creds = require_paper_env()
-    store, broker, clock = build_runtime(creds)
-    eng = Engine(store, broker, clock, cfg["universe"], cfg["strategy"])
+    store, broker, clock = build_runtime(creds, cfg)
+    notifier = Notifier.from_env(store)
+    sched, runners = build_engine(cfg, store, broker, clock, notifier=notifier)
+    sched.jobs = build_jobs(cfg, store, broker, clock, runners, notifier=notifier, backup_dir=DATA_DIR / "backups",
+                            evening=lambda d, now: send_evening(store, broker, notifier, d, now),
+                            lab=lambda d, now: start_lab(),
+                            p100=lambda d, now: run_p100_day(store, clock, cfg, d, now),
+                            morning=lambda now: send_morning(store, broker, clock, notifier, now))
     t = threading.Thread(target=serve, kwargs={"db_path": DB_PATH, "password": creds["dash_password"],
                                                "broker": broker, "clock": clock, "universe": cfg["universe"],
+                                               "max_same_side": int((cfg.get("risk") or {}).get("max_same_side", 15)),
+                                               "daily_loss_pct": float((cfg.get("risk") or {}).get("daily_loss_pct", 0.02)),
                                                "host": "0.0.0.0", "port": 8080},
                          daemon=True, name="dashboard")
     t.start()
-    eng.run_forever()
+    sched.run_forever()
     return 0
+
+
+def account_equity(broker) -> Optional[float]:
+    try:
+        return float(broker.account()["equity"]) if broker is not None else None
+    except Exception:
+        return None
+
+
+def send_evening(store, broker, notifier, d: date, now: datetime) -> str:
+    from .messages import evening_report
+    return notifier.send("evening", "evening", evening_report(store, d, account_equity(broker)), now)
+
+
+def send_morning(store, broker, clock, notifier, now: datetime) -> str:
+    from .messages import morning_brief
+    return notifier.send("morning", "morning", morning_brief(store, broker, clock, now), now)
+
+
+def cmd_brief(which: str, dry_run: bool, day: Optional[str]) -> int:
+    from .notify import Notifier
+    store, broker, clock = optional_runtime()
+    notifier = Notifier.from_env(store, dry_run=dry_run)
+    now = now_et()
+    if which == "morning":
+        status = send_morning(store, broker, clock, notifier, now)
+    else:
+        status = send_evening(store, broker, notifier, date.fromisoformat(day) if day else now.date(), now)
+    if not dry_run:
+        print(f"evening/morning message: {status}")
+    return 0
+
+
+def cmd_test_alert() -> int:
+    from .notify import Notifier
+    from .store import Store
+    load_env()
+    store = Store(DB_PATH)
+    n = Notifier.from_env(store)
+    status = n.send("test", "test", f"Trading Chambers test alert {now_et().strftime('%Y-%m-%d %H:%M:%S')} ET. "
+                                    "If you can read this on your phone, alerts work.")
+    print(f"test alert: {status}")
+    return 0 if status == "sent" else 1
+
+
+def run_p100_day(store, clock, cfg: dict, d: date, now: datetime, tune: bool = True):
+    from .p100 import run_p100
+    sessions = {}
+    if clock is not None:
+        try:
+            sessions = clock.sessions_between(d - timedelta(days=20), d + timedelta(days=10))
+        except Exception as e:
+            log.warning("calendar unavailable (%s); assuming weekday sessions", e)
+    s1 = ((cfg.get("sleeves") or {}).get("S1") or {}).get("params") or {}
+    return run_p100(store, d, now, cfg["universe"], sessions, cfg["strategy"], s1, tune=tune)
+
+
+def cmd_p100(day: Optional[str]) -> int:
+    from .p100 import format_p100
+    cfg = load_config()
+    store, broker, clock = optional_runtime()
+    d = date.fromisoformat(day) if day else now_et().date()
+    res = run_p100_day(store, clock, cfg, d, now_et())
+    print(format_p100(res))
+    return 0
+
+
+BROKER_CHECK_KEYS = ("account_number", "status", "crypto_status", "currency", "multiplier", "pattern_day_trader",
+                     "daytrade_count", "daytrading_buying_power", "regt_buying_power", "buying_power", "cash",
+                     "equity", "last_equity", "shorting_enabled", "trading_blocked", "account_blocked",
+                     "trade_suspended_by_user")
+
+
+def broker_check_text(details: dict) -> str:
+    """Report how Alpaca currently classifies the account (§5.5). No behaviour depends on it in 1A."""
+    mult = str(details.get("multiplier") or "")
+    kind = {"1": "cash account (multiplier 1)", "2": "margin account, 2x (Reg T)",
+            "4": "margin account, 4x (day-trading buying power)"}.get(mult, f"multiplier {mult or 'unknown'}")
+    lines = ["== broker check (report only) ==", f"account type: {kind}",
+             f"pattern day trader flag: {details.get('pattern_day_trader')}",
+             f"day-trade count (rolling 5 business days): {details.get('daytrade_count')}"]
+    for k in BROKER_CHECK_KEYS:
+        if k in details:
+            lines.append(f"  {k}: {details[k]}")
+    extra = sorted(k for k in details if k not in BROKER_CHECK_KEYS and any(w in k.lower() for w in
+                                                                              ("day", "pdt", "intraday", "margin")))
+    if extra:
+        lines.append("other day-trading / margin fields Alpaca returns (new rule fields would show here):")
+        lines += [f"  {k}: {details[k]}" for k in extra]
+    return "\n".join(lines)
+
+
+def cmd_broker_check() -> int:
+    creds = require_paper_env()
+    store, broker, clock = build_runtime(creds)
+    print(broker_check_text(broker.account_details()))
+    return 0
+
+
+def cmd_gate_1a() -> int:
+    from .gate1a import format_gate_1a, run_gate_1a
+    from .runtime import active_sleeves
+    cfg = load_config()
+    store, broker, clock = optional_runtime()
+    sessions = sessions_for(clock, store.cycle_dates(10))
+    res = run_gate_1a(store, sessions, tuple(active_sleeves(cfg)))
+    print(format_gate_1a(res))
+    return 0 if all(i["pass"] for i in res["items"]) and len(res["sessions"]) >= 10 else 1
+
+
+def start_lab() -> int:
+    from .lab import launch_lab
+    pid = launch_lab(sys.executable, str(ROOT))
+    log.info("night lab started (pid %d, nice 10)", pid)
+    return pid
+
+
+def cmd_lab() -> int:
+    from .lab import format_lab, run_lab
+    if hasattr(os, "nice"):
+        try:
+            cur = os.nice(0)
+            if cur < 10:
+                os.nice(10 - cur)          # lower CPU priority even when started by hand
+        except OSError:
+            pass
+    cfg = load_config()
+    store, broker, clock = optional_runtime()
+    now = now_et()
+    sessions = {}
+    if clock is not None:
+        try:
+            sessions = clock.sessions_between(now.date() - timedelta(days=120), now.date())
+        except Exception as e:
+            log.warning("calendar unavailable (%s); assuming 9:30-16:00", e)
+    out = run_lab(store, now, cfg["universe"], sessions)
+    print(format_lab(out))
+    return 0
+
+
+def cmd_watchdog() -> int:
+    from .notify import Notifier
+    from .runtime import active_sleeves
+    from .watchdog import run_watchdog
+    cfg = load_config()
+    store, broker, clock = optional_runtime()
+    if clock is None:
+        print("watchdog needs Alpaca credentials for the market calendar", file=sys.stderr)
+        return 2
+    stale = run_watchdog(store, clock, Notifier.from_env(store), active_sleeves(cfg))
+    for s in stale:
+        print(f"STALE {s['sleeve_id']}: due {s['due'].isoformat()} last {s['last_cycle_ts']}")
+    return 1 if stale else 0
 
 
 def main(argv=None) -> int:
@@ -285,28 +555,58 @@ def main(argv=None) -> int:
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--replay", metavar="YYYY-MM-DD")
     ap.add_argument("--params", metavar="k=v,k=v", help="with --replay: override the live params")
+    ap.add_argument("--sleeve", default="S0", help="with --replay/--sweep: which sleeve (default S0)")
     ap.add_argument("--recompute-costs", action="store_true")
     ap.add_argument("--sweep", action="store_true")
     ap.add_argument("--gate", action="store_true")
+    ap.add_argument("--brief", choices=["morning", "evening"])
+    ap.add_argument("--dry-run", action="store_true", help="with --brief: print the text, send nothing")
+    ap.add_argument("--date", metavar="YYYY-MM-DD", help="with --brief evening / --p100: which day")
+    ap.add_argument("--test-alert", action="store_true")
+    ap.add_argument("--watchdog", action="store_true")
+    ap.add_argument("--lab", action="store_true")
+    ap.add_argument("--p100", action="store_true")
+    ap.add_argument("--broker-check", action="store_true")
+    ap.add_argument("--gate-1a", action="store_true")
     args = ap.parse_args(argv)
     if args.params and not args.replay:
         ap.error("--params only applies to --replay")
-    setup_logging(to_file=not (args.smoke or args.replay or args.gate or args.recompute_costs))
+    setup_logging(to_file=not (args.smoke or args.replay or args.gate or args.recompute_costs or args.brief
+                                or args.test_alert or args.watchdog or args.broker_check or args.gate_1a))
+    if args.brief:
+        return cmd_brief(args.brief, args.dry_run, args.date)
+    if args.test_alert:
+        return cmd_test_alert()
+    if args.watchdog:
+        return cmd_watchdog()
+    if args.lab:
+        return cmd_lab()
+    if args.p100:
+        return cmd_p100(args.date)
+    if args.broker_check:
+        return cmd_broker_check()
+    if args.gate_1a:
+        return cmd_gate_1a()
     if args.smoke:
         return cmd_smoke()
     if args.once:
-        return cmd_once()
+        return cmd_once(args.sleeve)
     if args.replay:
         from .strategy import Params
         try:
-            apply_param_overrides(Params(), args.params)   # validate before touching the DB
+            if args.sleeve == "S0":
+                apply_param_overrides(Params(), args.params)   # validate before touching the DB
+            else:
+                from .strategies import SPECS
+                if args.sleeve not in SPECS:
+                    ap.error(f"unknown sleeve {args.sleeve}")
         except ValueError as e:
             ap.error(str(e))
-        return cmd_replay(args.replay, args.params)
+        return cmd_replay(args.replay, args.params, args.sleeve)
     if args.recompute_costs:
         return cmd_recompute_costs()
     if args.sweep:
-        return cmd_sweep()
+        return cmd_sweep(args.sleeve)
     if args.gate:
         return cmd_gate()
     return cmd_run()

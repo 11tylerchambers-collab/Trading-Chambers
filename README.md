@@ -1,4 +1,21 @@
-# Trading Chambers — Phase 0: Heartbeat Engine
+# Trading Chambers — Phase 0 engine + Phase 1A sleeves
+
+> **Phase 1A** (branch `phase1a`, spec `PHASE1A_SPEC.md`) runs four sleeves in one process (S0 the Phase 0
+> VWAP reversion below, unchanged; S1 SPY/QQQ 15-min mean reversion; S2 BTC/USD 1-hour breakout, 24/7;
+> S3 GLD/USO session-4h trend following, held overnight). It adds random twins, 1% ATR sizing, portfolio
+> circuit breakers, a daily broker recon, nightly backups, a news-day calendar, Telegram messages, a
+> suggest-only night lab and a $100 cash-account replay. Build notes: `BUILD_REPORT_1A.md`; deploy:
+> `deploy/INSTALL.md` §E. Extra commands:
+>
+> | Command | What it does |
+> |---|---|
+> | `--once --sleeve S1\|S2\|S3` | one cycle of that sleeve (all sleeves are reconciled first) |
+> | `--replay DATE --sleeve S0\|S1\|S2\|S3` | replay a stored day, with the day's random twin |
+> | `--sweep --sleeve S1\|S2\|S3` | run a sleeve's sweep now |
+> | `--brief morning\|evening --dry-run` | print the Telegram text; without `--dry-run` it sends |
+> | `--test-alert` / `--watchdog` | send a test alert / check heartbeats (run each minute by a timer) |
+> | `--lab` / `--p100 --date DATE` | night lab / $100 cash-account replay of a day |
+> | `--broker-check` / `--gate-1a` | account type, PDT flag, day trades / Phase 1A gate over 10 sessions |
 
 One deterministic strategy (VWAP mean reversion) on a full Alpaca **paper**
 account, every market day, on its own, with an honest heartbeat and a complete
