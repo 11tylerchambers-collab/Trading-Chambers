@@ -127,3 +127,55 @@ def test_s0_news_day_skip(tmp_path):
     eng.run_cycle()
     t = st.open_trades()[0]
     assert t.news_day == 1 and t.event == "CPI (Aug)"
+
+
+def short_engine(tmp_path, **broker_kw):
+    """AAPL jumps 1% above a flat VWAP on volume: S0 fires a short."""
+    bars = flat_bars(100.0, OPEN, 30) + [Bar(OPEN + timedelta(minutes=30), 101, 101, 101, 101, 500.0)]
+    ft = FakeTime(OPEN + timedelta(minutes=31, seconds=5))
+    broker = MockBroker(bars={"AAPL": bars}, **broker_kw)
+    st = Store(tmp_path / "t.db")
+    eng = Engine(st, broker, make_clock(ft, broker), ["AAPL"], CFG, sleep_fn=ft.sleep)
+    eng.startup()
+    return eng, st, broker, ft
+
+
+def test_s0_short_skipped_when_not_shortable_and_cached_per_day(tmp_path):
+    eng, st, broker, ft = short_engine(tmp_path)
+    broker.not_shortable = {"AAPL"}
+    res = eng.run_cycle()
+    assert res.reasons == {"not_shortable": 1} and res.signals_fired == 0 and broker.submitted == []
+    sig = st.signals_for_day(D)[-1]
+    assert sig["fired"] == 0 and sig["reason"] == "not_shortable" and sig["dev_pct"] > 0.3
+    broker.not_shortable = set()               # the flag is read once per symbol per day
+    ft.advance(minutes=1)
+    assert eng.run_cycle().reasons == {"not_shortable": 1}
+    assert broker.calls["asset_shortable"] == 1
+
+
+def test_s0_shortable_lookup_failure_skips_then_retries(tmp_path):
+    eng, st, broker, ft = short_engine(tmp_path, fail={"asset_shortable"})
+    assert eng.run_cycle().reasons == {"not_shortable": 1} and broker.submitted == []
+    broker.fail = set()                        # failures are not cached
+    ft.advance(minutes=1)
+    eng.run_cycle()
+    assert [(t.symbol, t.side) for t in st.open_trades()] == [("AAPL", "short")]
+    assert broker.calls["asset_shortable"] == 2
+
+
+def test_long_entries_never_ask_shortable(tmp_path):
+    bars = flat_bars(100.0, OPEN, 30) + [Bar(OPEN + timedelta(minutes=30), 99, 99, 99, 99, 500.0)]
+    ft = FakeTime(OPEN + timedelta(minutes=31, seconds=5))
+    broker = MockBroker(bars={"AAPL": bars})
+    broker.not_shortable = {"AAPL"}
+    eng = Engine(Store(tmp_path / "t.db"), broker, make_clock(ft, broker), ["AAPL"], CFG, sleep_fn=ft.sleep)
+    eng.startup()
+    eng.run_cycle()
+    assert [(t.symbol, t.side) for t in eng.store.open_trades()] == [("AAPL", "long")]
+    assert "asset_shortable" not in broker.calls
+
+
+def test_crypto_is_never_shortable():
+    from chambers.broker import Broker
+    b = Broker.__new__(Broker)                 # no network: crypto is answered before any API call
+    assert b.asset_shortable("BTC/USD") is False

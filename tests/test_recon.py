@@ -150,4 +150,42 @@ def test_morning_brief_once_per_session_day(tmp_path):
     ft.now = when
     when, action = mb.plan(ft.now)
     action()
-    assert len(sent) == 1 and mb.plan(ft.now)[1] is None
+    when, action = mb.plan(ft.now)
+    assert len(sent) == 1 and action is None
+    assert when > ft.now                       # never today's 8:45 again (that starved S2's 9:00 cycle)
+
+
+class HourlyStub:
+    """Stands in for S2: wants the loop at 9:00:10 on a session day."""
+    sleeve_id = "S2"
+    state = "running"
+
+    def __init__(self, ft):
+        self.ft, self.ran = ft, []
+
+    def plan(self, now):
+        mark = datetime(2026, 9, 22, 9, 0, 10, tzinfo=ET)
+        if not self.ran and now < mark:
+            return mark, (lambda: self.ran.append(self.ft.now))
+        if not self.ran:
+            return now, (lambda: self.ran.append(self.ft.now))
+        return now + timedelta(hours=1), None
+
+    def stop(self):
+        pass
+
+
+def test_morning_brief_does_not_starve_the_9am_cycle(tmp_path):
+    from chambers.scheduler import Scheduler
+    st = Store(tmp_path / "t.db")
+    ft = FakeTime(datetime(2026, 9, 22, 8, 40, tzinfo=ET))
+    broker = MockBroker()
+    clk = make_clock(ft, broker)
+    mb = MorningBrief(st, clk, lambda now: st.write_alert(now, "morning", "morning", "brief", "sent"))
+    s2 = HourlyStub(ft)
+    sch = Scheduler(st, broker, clk, [s2], jobs=[mb], sleep_fn=ft.sleep)
+    ticks = 0
+    while not s2.ran and ticks < 1000:
+        sch.tick()
+        ticks += 1
+    assert s2.ran == [datetime(2026, 9, 22, 9, 0, 10, tzinfo=ET)] and ticks < 10

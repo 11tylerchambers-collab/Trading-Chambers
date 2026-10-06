@@ -15,6 +15,7 @@ from .watchdog import expected_marks
 
 N_DAYS = 10
 MIN_COVERAGE = 0.98
+S0_MIN_TRADES = 20      # §15.2 says 30; lowered after the swept entry_dev_pct cut S0 to 25–61/day (DECISIONS.md)
 MESSAGE_RATE = 0.95
 TRADE_FIELDS = ("hypothesis_json", "exit_reason", "est_cost", "net_pnl", "news_day", "mae_pct", "mfe_pct")
 TWIN_FIELDS = ("hypothesis_json", "exit_reason", "est_cost", "net_pnl", "news_day")
@@ -53,8 +54,8 @@ def run_gate_1a(store: Store, sessions: Optional[dict] = None, sleeves: tuple = 
     # 2. trade counts
     s0 = {ds: len(store.closed_trades_for_day(ds, "S0")) for ds in dates}
     s1 = sum(len(store.closed_trades_for_day(ds, "S1")) for ds in dates) / len(dates) if dates else 0
-    ok2 = all(v >= 30 for v in s0.values()) and s1 >= 1
-    add(2, "S0 >= 30 closed trades/day; S1 >= 1/day average", ok2,
+    ok2 = all(v >= S0_MIN_TRADES for v in s0.values()) and s1 >= 1
+    add(2, f"S0 >= {S0_MIN_TRADES} closed trades/day; S1 >= 1/day average", ok2,
         f"S0 per day {list(s0.values())}; S1 average {s1:.2f}/day")
     # 3. complete fields
     missing = []

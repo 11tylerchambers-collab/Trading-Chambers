@@ -25,6 +25,7 @@ from typing import Any, Iterable, Optional
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
+LAB_MIN_APPROVE_TRADES = 30   # a night-lab suggestion needs this many graded trades before it can be approved
 SCHEMA_VERSION = 1
 log = logging.getLogger("chambers.store")
 
@@ -1286,11 +1287,21 @@ class Store:
             out.append(d)
         return out
 
+    def lab_suggestion(self, suggestion_id: int) -> Optional[dict]:
+        r = self._one("SELECT * FROM lab_suggestions WHERE id=?", (suggestion_id,))
+        if r is None:
+            return None
+        d = dict(r)
+        d["params"] = _uj(d.pop("params_json"))
+        return d
+
     def decide_lab_suggestion(self, suggestion_id: int, status: str, now: datetime, note: Optional[str] = None) -> bool:
+        """Pending → approved/rejected. Approval also needs >= LAB_MIN_APPROVE_TRADES graded trades."""
         if status not in ("approved", "rejected"):
             raise ValueError("status must be approved or rejected")
-        cur = self._exec("UPDATE lab_suggestions SET status=?, decided_at=?, note=? WHERE id=? AND status='pending'",
-                         (status, iso(now), note, suggestion_id))
+        cur = self._exec("UPDATE lab_suggestions SET status=?, decided_at=?, note=? WHERE id=? AND status='pending' "
+                         "AND (?='rejected' OR COALESCE(grade_trades, 0)>=?)",
+                         (status, iso(now), note, suggestion_id, status, LAB_MIN_APPROVE_TRADES))
         return cur.rowcount == 1
 
     def latest_lab_rule_passes(self) -> list[dict]:

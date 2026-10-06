@@ -131,6 +131,15 @@ class Broker:
         except Exception as e:
             self._fail("positions", e)
 
+    def asset_shortable(self, symbol: str) -> bool:
+        """Alpaca's `shortable` flag for the asset. Crypto cannot be sold short on Alpaca at all."""
+        if is_crypto(symbol):
+            return False
+        try:
+            return bool(self._trading.get_asset(symbol).shortable)
+        except Exception as e:
+            self._fail("asset_shortable", e)
+
     def open_orders(self) -> list[dict]:
         try:
             orders = self._trading.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))

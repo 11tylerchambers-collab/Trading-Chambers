@@ -47,6 +47,7 @@ class MockBroker:
         self.cancelled_orders = []
         self.equity = 100000.0            # account equity (Phase 1A risk checks move it)
         self.tf_bars = {}                 # (symbol, minutes) -> bars for bars()/crypto_bars()
+        self.not_shortable = set()        # symbols whose asset_shortable() is False (crypto always is)
 
     def _hit(self, name):
         self.calls[name] = self.calls.get(name, 0) + 1
@@ -71,6 +72,10 @@ class MockBroker:
                 out.append({"symbol": sym, "qty": qty, "avg_entry_price": self.avg_entry.get(sym, self._price(sym)),
                             "current_price": self._price(sym), "unrealized_pl": 0.0})
         return out
+
+    def asset_shortable(self, symbol):
+        self._hit("asset_shortable")
+        return "/" not in symbol and symbol not in self.not_shortable
 
     def open_orders(self):
         self._hit("open_orders")

@@ -203,6 +203,7 @@ class SleeveBase:
         self.twin = None                 # twin.Twin (set by the scheduler)
         self.handle_flatten_requests = True   # False under the scheduler, which flattens every sleeve
         self._news_cache: dict[str, tuple[bool, Optional[str]]] = {}
+        self._shortable_cache: dict[tuple[date, str], bool] = {}
         self.counters = {"cycles_today": 0, "signals_today": 0, "fired_today": 0,
                          "opened_today": 0, "closed_today": 0}
 
@@ -298,10 +299,23 @@ class SleeveBase:
             self._log_error("cycle.risk", e)
 
     # ---- entry gates (after the strategy fired) --------------------------------
+    def shortable(self, symbol: str, now: datetime) -> bool:
+        """The broker's shortable flag, asked once per symbol per day. A failed lookup counts as not
+        shortable (already in store.errors via the broker) and is not cached, so the next cycle asks again."""
+        key = (now.date(), symbol)
+        if key not in self._shortable_cache:
+            try:
+                self._shortable_cache[key] = bool(self.broker.asset_shortable(symbol))
+            except BrokerError:
+                return False
+        return self._shortable_cache[key]
+
     def entry_gate(self, symbol: str, side: str, notional: float, skip_news_days: bool,
                    now: datetime) -> Optional[str]:
-        """Reason an entry the strategy fired must be skipped, or None. Order: news_day,
+        """Reason an entry the strategy fired must be skipped, or None. Order: not_shortable, news_day,
         daily_loss_halt, same_side_cap, exposure_cap (the last three are portfolio-wide, §3.2)."""
+        if side == "short" and not self.shortable(symbol, now):
+            return "not_shortable"
         if skip_news_days and self.news(now.date())[0]:
             return "news_day"
         if self.portfolio is not None:

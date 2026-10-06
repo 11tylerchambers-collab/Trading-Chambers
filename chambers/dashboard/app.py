@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse
 from ..bars import TF_1H
 from ..clock import ET, MarketClock, now_et
 from ..data import SymbolState
-from ..store import Store
+from ..store import LAB_MIN_APPROVE_TRADES, Store
 from ..strategies import SPECS
 from ..strategy import PARAM_KEYS, Params
 from ..sweep import GRID
@@ -249,7 +249,7 @@ def create_app(db_path, password: str, broker=None, clock: Optional[MarketClock]
     def lab_panel() -> dict:
         runs = store.lab_runs(1)
         return {"last_run": runs[0] if runs else None, "results": store.lab_results(),
-                "suggestions": store.lab_suggestions(limit=10)}
+                "suggestions": store.lab_suggestions(limit=10), "min_approve_trades": LAB_MIN_APPROVE_TRADES}
 
     def p100_view() -> dict:
         led = store.p100_ledger(20)
@@ -355,6 +355,11 @@ def create_app(db_path, password: str, broker=None, clock: Optional[MarketClock]
             raise HTTPException(status_code=400, detail="id and status are required")
         if status not in ("approved", "rejected"):
             raise HTTPException(status_code=400, detail="status must be approved or rejected")
+        sug = store.lab_suggestion(sid)
+        if status == "approved" and sug and sug["status"] == "pending" \
+                and (sug["grade_trades"] or 0) < LAB_MIN_APPROVE_TRADES:
+            raise HTTPException(status_code=409, detail=f"approval needs >= {LAB_MIN_APPROVE_TRADES} graded trades "
+                                                        f"(this suggestion has {sug['grade_trades'] or 0})")
         if not store.decide_lab_suggestion(sid, status, now_et(), body.get("note")):
             raise HTTPException(status_code=409, detail="no pending suggestion with that id")
         return {"ok": True, "id": sid, "status": status}

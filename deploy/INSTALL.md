@@ -272,7 +272,10 @@ diff <(tail -n +2 /tmp/before.txt) <(tail -n +2 /tmp/after.txt | head -n -1) && 
 (The 1A output's first line also lists the new `skip_news_days: False` param and its
 last line adds S0's random twin for the day, hence `tail -n +2` / `head -n -1`.
 The replay uses the current params: if a sweep changed them in between, pass the
-same `--params` to both.)
+same `--params` to both. If the "after" replay is the first command to open the
+database, it also prints a one-time `Phase 1A migration: ... backed up to ...` line
+at the top, which shifts the diff by one line: run the "after" replay a second time
+and diff that.)
 
 Then, still with the service stopped:
 

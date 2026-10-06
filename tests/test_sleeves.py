@@ -281,12 +281,12 @@ def test_s2_runs_every_hour_across_midnight_utc_and_sweeps_at_0030(tmp_path):
 
 # ======================================================================== S3 live, overnight
 
-def s3_setup(tmp_path, now, capital=20000.0):
+def s3_setup(tmp_path, now, capital=20000.0, uso=lambda i: 70 + 0.2 * math.sin(i), uso_today=70.0):
     ft = FakeTime(now)
     broker = MockBroker(sessions=SESSIONS)
     st = Store(tmp_path / "t.db")
-    # 60 stored session-4h bars in a steady uptrend for GLD, flat USO
-    for sym, f in (("GLD", lambda i: 180 + 0.4 * i), ("USO", lambda i: 70 + 0.2 * math.sin(i))):
+    # 60 stored session-4h bars in a steady uptrend for GLD, flat USO (unless `uso` says otherwise)
+    for sym, f in (("GLD", lambda i: 180 + 0.4 * i), ("USO", uso)):
         bs = []
         d = date(2026, 6, 1)
         i = 0
@@ -300,8 +300,8 @@ def s3_setup(tmp_path, now, capital=20000.0):
         st.write_bars_tf(sym, TF_S4H, bs)
     o = datetime(2026, 9, 22, 9, 30, tzinfo=ET)
     broker.bars["GLD"] = [bar(o + timedelta(minutes=i), 204.5 + 0.001 * i) for i in range(390)]
-    broker.bars["USO"] = [bar(o + timedelta(minutes=i), 70.0) for i in range(390)]
-    broker.prices.update({"GLD": 204.7, "USO": 70.0})
+    broker.bars["USO"] = [bar(o + timedelta(minutes=i), uso_today) for i in range(390)]
+    broker.prices.update({"GLD": 204.7, "USO": uso_today})
     clk = make_clock(ft, broker)
     sl = BarSleeve(S3, st, broker, clk, {}, sleep_fn=ft.sleep, capital=capital, fetch_history=False)
     return sl, st, broker, ft
@@ -330,6 +330,29 @@ def test_s3_decides_at_1330_and_flatten_at_and_holds_overnight(tmp_path):
     assert sl2.positions["GLD"].bars_held == 1                       # the 13:30 bar came after the entry bar (09:30)
     assert broker.submitted[-1]["symbol"] == "GLD" and len([o for o in broker.submitted if o["side"] == "sell"]) == 0
     assert st.errors_count(where="reconcile") == 0
+
+
+@pytest.mark.parametrize("shortable", [False, True])
+def test_s3_short_entry_checks_shortable(tmp_path, shortable):
+    # USO in a steady downtrend: S3 wants to short it at 13:30 (the live USO rejections of Sep 30 – Oct 6)
+    sl, st, broker, ft = s3_setup(tmp_path, datetime(2026, 9, 22, 9, 0, tzinfo=ET),
+                                  uso=lambda i: 80 - 0.2 * i, uso_today=67.0)
+    if not shortable:
+        broker.not_shortable = {"USO"}
+    sch = Scheduler(st, broker, sl.clock, [sl], sleep_fn=ft.sleep)
+    sch.startup()
+    while ft.now < datetime(2026, 9, 22, 13, 31, tzinfo=ET):
+        sch.tick()
+    uso = [s for s in st.signals_for_day(D1, "S3") if s["symbol"] == "USO"]
+    assert uso[0]["ts"][11:19] == "13:30:05"
+    if shortable:
+        assert uso[0]["fired"] == 1 and [t.side for t in st.open_trades("S3") if t.symbol == "USO"] == ["short"]
+    else:
+        assert uso[0]["fired"] == 0 and uso[0]["reason"] == "not_shortable"
+        assert [o for o in broker.submitted if o["symbol"] == "USO"] == []
+        assert st.errors_count(where="broker.submit_market") == 0
+    assert [t.symbol for t in st.open_trades("S3")].count("GLD") == 1      # the long side is unaffected
+    assert broker.calls["asset_shortable"] == 1     # once for USO that day (cached), never for the GLD long
 
 
 # ======================================================================== replay == live, sweep

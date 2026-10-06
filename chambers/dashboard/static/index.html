@@ -479,11 +479,14 @@ button:disabled { opacity:.4; cursor:default; }
     var lab = s.lab || {}, run = lab.last_run, sug = lab.suggestions || [], res = lab.results || [];
     var h = '<div class="small muted">' + (run ? 'last run ' + esc((run.started_at || '').slice(0, 16).replace('T', ' ')) + ' · ' + esc(run.status) + (run.paused_s ? ' · paused ' + num(run.paused_s, 0) + 's' : '') : 'the lab has not run yet') + '</div>';
     var pend = sug.filter(function (x) { return x.status === 'pending'; });
+    var minTr = lab.min_approve_trades || 0;
     h += pend.map(function (x) {
+      var few = (x.grade_trades || 0) < minTr;
       return '<div class="sug"><div class="h">' + esc(x.candidate) + ' — suggested</div>' +
         '<div>graded net <span class="' + pnlCls(x.grade_net) + '">' + money(x.grade_net) + '</span> vs twin ' + money(x.twin_grade_net) + ' · ' + esc(x.grade_trades) + ' trades · ' + esc(x.n_sessions) + ' sessions</div>' +
         '<div class="muted">params ' + esc(JSON.stringify(x.params)) + '</div>' +
-        '<div class="b"><button class="primary" data-sug="' + x.id + '" data-st="approved">Approve</button><button class="danger" data-sug="' + x.id + '" data-st="rejected">Reject</button></div></div>';
+        (few ? '<div class="muted">approval needs ' + minTr + ' graded trades (has ' + esc(x.grade_trades || 0) + ')</div>' : '') +
+        '<div class="b"><button class="primary" data-sug="' + x.id + '" data-st="approved"' + (few ? ' disabled title="needs ' + minTr + ' graded trades to approve"' : '') + '>Approve</button><button class="danger" data-sug="' + x.id + '" data-st="rejected">Reject</button></div></div>';
     }).join('');
     var decided = sug.filter(function (x) { return x.status === 'approved' || x.status === 'rejected'; }).slice(0, 5);
     if (decided.length) h += '<div class="small muted">' + decided.map(function (x) { return esc(x.candidate) + ' ' + esc(x.status) + ' ' + esc((x.decided_at || '').slice(0, 10)); }).join(' · ') + '</div>';

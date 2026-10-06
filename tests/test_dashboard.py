@@ -250,11 +250,24 @@ def test_edit_bar_sleeve_params(client_1a):
 
 def test_lab_approve_and_reject(client_1a):
     c = client_1a
-    assert c.post("/api/lab/decide", json={"id": 1, "status": "approved"}).status_code == 401
-    assert c.post("/api/lab/decide", json={"id": 1, "status": "maybe"}, headers=c.h).status_code == 400
-    assert c.post("/api/lab/decide", json={"id": 1, "status": "approved"}, headers=c.h).json()["status"] == "approved"
-    assert c.post("/api/lab/decide", json={"id": 1, "status": "rejected"}, headers=c.h).status_code == 409
-    sug = Store(c.path).lab_suggestions()[0]
+    st = Store(c.path)
+    big = st.write_lab_suggestion(1, 2, "L2_pullback", NOW, {"down_days": 3}, 60, 300.0, -80.0, 30)
+    assert c.post("/api/lab/decide", json={"id": big, "status": "approved"}).status_code == 401
+    assert c.post("/api/lab/decide", json={"id": big, "status": "maybe"}, headers=c.h).status_code == 400
+    assert c.post("/api/lab/decide", json={"id": big, "status": "approved"}, headers=c.h).json()["status"] == "approved"
+    assert c.post("/api/lab/decide", json={"id": big, "status": "rejected"}, headers=c.h).status_code == 409
+    sug = st.lab_suggestion(big)
     assert sug["status"] == "approved" and sug["decided_at"]
+    assert c.get("/api/state", headers=c.h).json()["lab"]["min_approve_trades"] == 30
+
+
+def test_lab_approval_needs_30_graded_trades(client_1a):
+    c = client_1a                               # suggestion 1 was graded on 20 trades
+    r = c.post("/api/lab/decide", json={"id": 1, "status": "approved"}, headers=c.h)
+    assert r.status_code == 409 and "30 graded trades" in r.json()["detail"] and "has 20" in r.json()["detail"]
+    st = Store(c.path)
+    assert st.lab_suggestion(1)["status"] == "pending"
+    assert st.decide_lab_suggestion(1, "approved", NOW) is False          # the store enforces it too
+    assert c.post("/api/lab/decide", json={"id": 1, "status": "rejected"}, headers=c.h).json()["status"] == "rejected"
     # approving records the decision only: no params, trades or sleeves change
     assert Store(c.path).read_params("S1") is None

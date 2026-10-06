@@ -126,6 +126,9 @@ class MorningBrief:
                 return t, None
             if now < session.open + LATE_BRIEF:
                 return now, (lambda: self.send(self.clock.now_et()))
-        nxt = self.clock.next_session(now)
+        # Before today's open, next_session(now) is today's session, whose 8:45 may already be past (the brief
+        # was sent): a past time with no action would win the scheduler's min() until 9:30 and starve S2's
+        # 9:00 cycle. Ask for the session after today's open instead.
+        nxt = self.clock.next_session(max(now, session.open) if session is not None else now)
         target = self._time(nxt.date) if nxt else now + timedelta(hours=1)
         return min(target, now + timedelta(hours=1)), None

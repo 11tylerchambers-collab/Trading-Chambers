@@ -2,6 +2,7 @@
 import math
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
 import yaml
 
 from chambers.clock import ET
@@ -104,3 +105,17 @@ def test_broker_check_text():
                            "intraday_adjustments": "0", "status": "ACTIVE"})
     assert "margin account, 4x" in t and "pattern day trader flag: False" in t and "day-trade count" in t
     assert "intraday_adjustments: 0" in t
+
+
+@pytest.mark.parametrize("s0_trades, ok", [(20, True), (19, False)])
+def test_gate_1a_s0_needs_20_closed_trades_per_day(tmp_path, s0_trades, ok):
+    from chambers.gate1a import run_gate_1a
+    st = Store(tmp_path / "t.db")
+    t = datetime(2026, 9, 22, 10, 0, tzinfo=ET)
+    st.write_cycle(t, "running", 20, 0, 0, 0, 1, "S0")
+    for i, sid in enumerate(["S0"] * s0_trades + ["S1"]):
+        tid = st.open_trade("SPY", "long", 1, t, 100.0, f"o{i}", None, None, {}, {}, sleeve_id=sid)
+        st.close_trade(tid, t + timedelta(minutes=5), 100.0, f"x{i}", None, None, "time_stop", 5, 0.0, 0.0,
+                       0.0, 0.01, -0.01)
+    item = {i["id"]: i for i in run_gate_1a(st)["items"]}[2]
+    assert item["pass"] is ok and item["name"].startswith("S0 >= 20 closed trades/day")
