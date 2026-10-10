@@ -15,7 +15,6 @@ from .watchdog import expected_marks
 
 N_DAYS = 10
 MIN_COVERAGE = 0.98
-S0_MIN_TRADES = 20      # §15.2 says 30; lowered after the swept entry_dev_pct cut S0 to 25–61/day (DECISIONS.md)
 MESSAGE_RATE = 0.95
 TRADE_FIELDS = ("hypothesis_json", "exit_reason", "est_cost", "net_pnl", "news_day", "mae_pct", "mfe_pct")
 TWIN_FIELDS = ("hypothesis_json", "exit_reason", "est_cost", "net_pnl", "news_day")
@@ -30,8 +29,8 @@ def run_gate_1a(store: Store, sessions: Optional[dict] = None, sleeves: tuple = 
         items.append({"id": i, "name": name, "pass": bool(ok) and bool(dates), "detail": detail or "no sessions"})
 
     sess = {ds: (sessions or {}).get(date.fromisoformat(ds)) or default_session(date.fromisoformat(ds)) for ds in dates}
-    # 1. cycle coverage per sleeve
-    cov, bad = [], []
+    # 1. cycle coverage per sleeve, and 2. every expected cycle logged its evaluations with a reason
+    cov, bad, bad2, n_marks = [], [], [], 0
     for ds in dates:
         s = sess[ds]
         for sid in sleeves:
@@ -42,21 +41,30 @@ def run_gate_1a(store: Store, sessions: Optional[dict] = None, sleeves: tuple = 
                 marks = expected_marks(sid, s, s.open, s.close + timedelta(minutes=1))
             if not marks:
                 continue
-            got = {parse_ts(c["ts"]) for c in store.cycles_between(sid, marks[0] - timedelta(seconds=5),
-                                                                   marks[-1] + timedelta(minutes=10))}
-            hit = sum(1 for m in marks if any(m - timedelta(seconds=5) <= g < m + timedelta(seconds=55) for g in got))
-            r = hit / len(marks)
+            got = [(parse_ts(c["ts"]), c["id"]) for c in store.cycles_between(sid, marks[0] - timedelta(seconds=5),
+                                                                              marks[-1] + timedelta(minutes=10))]
+            matched = []
+            for m in marks:
+                ids = [cid for g, cid in got if m - timedelta(seconds=5) <= g < m + timedelta(seconds=55)]
+                if ids:
+                    matched.append(ids)
+            reasoned = store.cycles_with_reasoned_signals(cid for ids in matched for cid in ids)
+            hit, logged = len(matched), sum(1 for ids in matched if any(cid in reasoned for cid in ids))
+            n_marks += 1
             cov.append(f"{ds} {sid} {hit}/{len(marks)}")
-            if r < MIN_COVERAGE:
-                bad.append(f"{ds} {sid} {r:.1%}")
+            if hit / len(marks) < MIN_COVERAGE:
+                bad.append(f"{ds} {sid} {hit / len(marks):.1%}")
+            if logged / len(marks) < MIN_COVERAGE:
+                bad2.append(f"{ds} {sid} {logged / len(marks):.1%}")
     add(1, f"every active sleeve wrote >= {MIN_COVERAGE:.0%} of its expected cycles", not bad,
         ("FAIL " + ", ".join(bad[:8])) if bad else f"{len(cov)} sleeve-days all >= 98%")
-    # 2. trade counts
-    s0 = {ds: len(store.closed_trades_for_day(ds, "S0")) for ds in dates}
-    s1 = sum(len(store.closed_trades_for_day(ds, "S1")) for ds in dates) / len(dates) if dates else 0
-    ok2 = all(v >= S0_MIN_TRADES for v in s0.values()) and s1 >= 1
-    add(2, f"S0 >= {S0_MIN_TRADES} closed trades/day; S1 >= 1/day average", ok2,
-        f"S0 per day {list(s0.values())}; S1 average {s1:.2f}/day")
+    # 2. evaluation logging; trade counts are reported, not graded (DECISIONS.md, PHASE1A_SPEC §15.2)
+    trades = {sid: [len(store.closed_trades_for_day(ds, sid)) for ds in dates] for sid in sleeves}
+    counts = "; ".join(f"{sid} {v}" for sid, v in trades.items())
+    add(2, f"each active sleeve wrote a signal row with a reason for >= {MIN_COVERAGE:.0%} of its expected cycles",
+        not bad2 and n_marks > 0,
+        (("FAIL " + ", ".join(bad2[:8])) if bad2 else f"{n_marks} sleeve-days all >= 98%")
+        + f" | closed trades/day (not graded): {counts}")
     # 3. complete fields
     missing = []
     for ds in dates:

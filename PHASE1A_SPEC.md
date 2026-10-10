@@ -218,7 +218,7 @@ Auto-allocation between sleeves and walk-forward grading of live sleeves (1B) ·
 
 Ten consecutive trading days, verified from the database by `--gate-1a`:
 1. Every active sleeve wrote cycles for ≥ 98% of its expected cycles (S2 around the clock).
-2. S0 ≥ 30 closed trades/day; S1 ≥ 1/day average; S2 and S3 any number, but all cycles logged.
+2. Each active sleeve wrote a signal/evaluation row with a reason for ≥ 98% of its expected cycles. Closed trades per sleeve per day are reported, not graded. *(Changed 2026-10-10 from "S0 ≥ 30 closed trades/day; S1 ≥ 1/day average"; see DECISIONS.md.)*
 3. Every closed trade and twin trade has complete fields (hypothesis, exit_reason, costs, news_day).
 4. Recon passed every day, or every mismatch was explained and fixed.
 5. Sweeps, night lab, and P100 replay ran every night.

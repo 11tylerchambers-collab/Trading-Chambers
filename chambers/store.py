@@ -621,6 +621,17 @@ class Store:
                            (sleeve_id, iso(start), iso(end)))
         return [dict(r) for r in rows]
 
+    def cycles_with_reasoned_signals(self, cycle_ids: Iterable[int]) -> set[int]:
+        """The cycle ids among `cycle_ids` that wrote at least one signals row with a non-empty reason."""
+        ids = list(cycle_ids)
+        out: set[int] = set()
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            rows = self._query(f"SELECT DISTINCT cycle_id FROM signals WHERE cycle_id IN ({','.join('?' * len(chunk))}) "
+                               "AND reason IS NOT NULL AND reason != ''", tuple(chunk))
+            out.update(int(r["cycle_id"]) for r in rows)
+        return out
+
     def cycle_dates(self, limit: int = 5, sleeve_id: str = "S0") -> list[str]:
         """The last `limit` dates with at least one `running` cycle (a `--once` or after-hours start isn't a session)."""
         rows = self._query(

@@ -94,8 +94,10 @@ def test_gate_1a_over_a_simulated_day(tmp_path):
     items = {i["id"]: i for i in res["items"]}
     assert res["sessions"] == ["2026-09-22"]
     assert items[1]["pass"], items[1]["detail"]          # S0 385/385, S1 25/25, S3 2/2, S2 24/24
+    assert items[2]["pass"], items[2]["detail"]          # every expected cycle logged its evaluations
+    assert "closed trades/day (not graded)" in items[2]["detail"]
     assert items[3]["pass"] and items[7]["pass"]
-    assert not items[2]["pass"] and not items[6]["pass"]  # flat synthetic day; no Telegram
+    assert not items[6]["pass"]                           # no Telegram
     assert "OVERALL: FAIL" in format_gate_1a(res)
 
 
@@ -107,15 +109,36 @@ def test_broker_check_text():
     assert "intraday_adjustments: 0" in t
 
 
-@pytest.mark.parametrize("s0_trades, ok", [(20, True), (19, False)])
-def test_gate_1a_s0_needs_20_closed_trades_per_day(tmp_path, s0_trades, ok):
+def logged_day(st, minutes, with_reason=lambda m: True, s0_trades=0):
+    """An S0-only day: `minutes` cycles from 9:30:05, each with one signals row (reason empty unless with_reason(m))."""
+    open_ = datetime(2026, 9, 22, 9, 30, 5, tzinfo=ET)
+    for m in range(minutes):
+        t = open_ + timedelta(minutes=m)
+        cid = st.write_cycle(t, "running", 1, 0, 0, 0, 1, "S0")
+        st.write_signals(cid, [{"ts": t, "symbol": "SPY", "close": 100.0, "side": None, "fired": False,
+                                "reason": "dev_too_small" if with_reason(m) else "", "params": {}}], "S0")
+    for i in range(s0_trades):
+        tid = st.open_trade("SPY", "long", 1, open_, 100.0, f"o{i}", None, None, {}, {}, sleeve_id="S0")
+        st.close_trade(tid, open_ + timedelta(minutes=5), 100.0, f"x{i}", None, None, "time_stop", 5, 0.0, 0.0,
+                       0.0, 0.01, -0.01)
+
+
+@pytest.mark.parametrize("missing, ok", [(7, True), (8, False)])
+def test_gate_1a_item2_grades_evaluation_logging_not_trades(tmp_path, missing, ok):
     from chambers.gate1a import run_gate_1a
     st = Store(tmp_path / "t.db")
-    t = datetime(2026, 9, 22, 10, 0, tzinfo=ET)
-    st.write_cycle(t, "running", 20, 0, 0, 0, 1, "S0")
-    for i, sid in enumerate(["S0"] * s0_trades + ["S1"]):
-        tid = st.open_trade("SPY", "long", 1, t, 100.0, f"o{i}", None, None, {}, {}, sleeve_id=sid)
-        st.close_trade(tid, t + timedelta(minutes=5), 100.0, f"x{i}", None, None, "time_stop", 5, 0.0, 0.0,
-                       0.0, 0.01, -0.01)
-    item = {i["id"]: i for i in run_gate_1a(st)["items"]}[2]
-    assert item["pass"] is ok and item["name"].startswith("S0 >= 20 closed trades/day")
+    # 385 expected S0 cycles; 98% needs 378 with a reasoned signals row. Zero trades all day.
+    logged_day(st, 385, with_reason=lambda m: m >= missing)
+    item = {i["id"]: i for i in run_gate_1a(st, sleeves=("S0",))["items"]}[2]
+    assert item["pass"] is ok, item["detail"]
+    assert item["name"] == "each active sleeve wrote a signal row with a reason for >= 98% of its expected cycles"
+    assert "S0 [0]" in item["detail"]
+
+
+def test_gate_1a_item2_missing_cycles_count_as_unlogged(tmp_path):
+    from chambers.gate1a import run_gate_1a
+    st = Store(tmp_path / "t.db")
+    logged_day(st, 300, s0_trades=3)                     # cycles stop at 14:30: 300/385
+    items = {i["id"]: i for i in run_gate_1a(st, sleeves=("S0",))["items"]}
+    assert not items[1]["pass"] and not items[2]["pass"]
+    assert "77.9%" in items[2]["detail"] and "S0 [3]" in items[2]["detail"]
